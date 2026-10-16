@@ -1,3 +1,3 @@
 import type {Lead} from '../types/domain';import {request} from './http';
 export interface LeadImportRow{email:string;name?:string;phone?:string;company?:string;campaign?:string;source?:string}
-export const leadsApi={list:()=>request<{leads:Lead[]}>('/v1/leads'),importRows:(rows:LeadImportRow[])=>request<{imported:number}>('/v1/leads/import',{method:'POST',body:JSON.stringify({rows})})};
+export const leadsApi={list:()=>request<{leads:Lead[]}>('/v1/leads'),updateStatus:(id:string,status:Lead['status'])=>request<{lead:{id:string;status:Lead['status']}}>(`/v1/leads/${id}/status`,{method:'PATCH',body:JSON.stringify({status})}),retryWelcome:(id:string)=>request<{status:string}>(`/v1/leads/${id}/welcome-email/retry`,{method:'POST'}),importRows:(rows:LeadImportRow[])=>request<{imported:number}>('/v1/leads/import',{method:'POST',body:JSON.stringify({rows})})};

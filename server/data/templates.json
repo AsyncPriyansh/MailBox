@@ -12,5 +12,100 @@
     "last_used_at": null,
     "created_at": "2026-10-16T04:46:12.119Z",
     "updated_at": "2026-10-16T04:46:12.119Z"
+  },
+  {
+    "id": "1b6c4aeb-25db-4c15-b1b8-6705e2106a4d",
+    "workspace_id": "4a371ce0-90fc-4ecf-92dd-775a5b23a6ee",
+    "name": "tmeplate 2",
+    "subject": "Thanks for connecting, {{name}}! Here is your requested info",
+    "preheader": "We received your inquiry and our team is ready to help.",
+    "html_source": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>Thanks for connecting, {{name}}! Here is your requested info</title>\n  <div style=\"display:none;font-size:1px;color:#ffffff;line-height:1px;max-height:0px;max-width:0px;opacity:0;overflow:hidden;\">We received your inquiry and our team is ready to help.</div>\n  <style>\n    body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }\n    table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }\n    img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }\n    table { border-collapse: collapse !important; }\n    body { height: 100% !important; margin: 0 !important; padding: 0 !important; width: 100% !important; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }\n    @media screen and (max-width: 620px) {\n      .email-container { width: 100% !important; padding: 12px !important; }\n      .email-card { padding: 22px 18px !important; }\n    }\n  </style>\n</head>\n<body style=\"background-color: #f4f6f4; margin: 0; padding: 30px 10px;\">\n  <table border=\"0\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\">\n    <tr>\n      <td align=\"center\">\n        <table class=\"email-container\" border=\"0\" cellpadding=\"0\" cellspacing=\"0\" width=\"600\" style=\"max-width: 600px; width: 100%;\">\n          <tr>\n            <td class=\"email-card\" style=\"background-color: #ffffff; border-radius: 14px; padding: 36px 32px; border: 1px solid #e1e7e2; box-shadow: 0 4px 18px rgba(0,0,0,0.03);\">\n              <table border=\"0\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\">\n                \n          <tr>\n            <td style=\"padding: 10px 0; text-align: center;\">\n              <h3 style=\"margin: 0; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 15px; font-weight: 700; color: #176b4b; letter-spacing: 0.08em; line-height: 1.3;\">\n                {{company}}\n              </h3>\n            </td>\n          </tr>\n        \n          <tr>\n            <td style=\"padding: 10px 0; text-align: left;\">\n              <h1 style=\"margin: 0; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 26px; font-weight: 800; color: #1a241e; letter-spacing: -0.02em; line-height: 1.3;\">\n                Hi {{name}}, thanks for reaching out!\n              </h1>\n            </td>\n          </tr>\n        \n          <tr>\n            <td style=\"padding: 8px 0;\">\n              <p style=\"margin: 0 0 12px 0; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 15px; line-height: 1.65; color: #46564c; text-align: left;\">Thank you for getting in touch with our team. We received your details and are preparing the information you requested.</p><p style=\"margin: 0 0 12px 0; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 15px; line-height: 1.65; color: #46564c; text-align: left;\">Our team will review your inquiry and follow up shortly with next steps.</p>\n            </td>\n          </tr>\n        \n          <tr>\n            <td style=\"padding: 14px 0;\">\n              <table width=\"100%\" border=\"0\" cellspacing=\"0\" cellpadding=\"0\" style=\"background-color: #f3f8f5; border-radius: 10px; border: 1px solid #e1ece5;\">\n                <tr>\n                  <td style=\"padding: 20px 22px;\">\n                    <div style=\"font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 11px; font-weight: 800; color: #176b4b; letter-spacing: 0.08em; margin-bottom: 6px;\">NEXT STEPS</div>\n                    <div style=\"font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 16px; font-weight: 700; color: #1b2820; margin-bottom: 6px;\">What happens next?</div>\n                    <div style=\"font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 14px; line-height: 1.55; color: #48584e;\">1. Our team reviews your inquiry.\n2. We reach out to understand your requirements.\n3. We share relevant information and answer your questions.</div>\n                  </td>\n                </tr>\n              </table>\n            </td>\n          </tr>\n        \n          <tr>\n            <td style=\"padding: 16px 0; text-align: center;\">\n              <table border=\"0\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin: 0 auto;\">\n                <tr>\n                  <td align=\"center\" style=\"border-radius: 8px; background-color: #176b4b;\">\n                    <a href=\"https://example.com\" target=\"_blank\" style=\"font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 15px; font-weight: 700; color: #ffffff; text-decoration: none; padding: 13px 26px; border-radius: 8px; display: inline-block; border: 1px solid #176b4b;\">\n                      Visit Our Website →\n                    </a>\n                  </td>\n                </tr>\n              </table>\n            </td>\n          </tr>\n        \n          <tr>\n            <td style=\"padding: 20px 0;\">\n              <hr style=\"border: 0; border-top: 1px solid #e5eae6; margin: 0;\" />\n            </td>\n          </tr>\n        \n          <tr>\n            <td style=\"padding: 24px 0 10px 0; text-align: center;\">\n              <div style=\"font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 13px; font-weight: 700; color: #536459; margin-bottom: 4px;\">{{company}}</div>\n              <div style=\"font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 12px; color: #87958b; line-height: 1.5; margin-bottom: 10px;\">Sent to {{email}} because you requested information from us.</div>\n              <div style=\"font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 11px; color: #a0aca3;\">\n                <a href=\"{{unsubscribe_url}}\" style=\"color: #6a7c70; text-decoration: underline;\">Unsubscribe from communications</a>\n              </div>\n            </td>\n          </tr>\n        \n              </table>\n            </td>\n          </tr>\n        </table>\n      </td>\n    </tr>\n  </table>\n</body>\n</html>",
+    "mjml_source": null,
+    "project_json": {
+      "isRawHtml": false,
+      "blocks": [
+        {
+          "id": "block-brand",
+          "type": "heading",
+          "content": {
+            "text": "{{company}}",
+            "level": "h3",
+            "align": "center",
+            "color": "#176b4b"
+          }
+        },
+        {
+          "id": "block-hero-title",
+          "type": "heading",
+          "content": {
+            "text": "Hi {{name}}, thanks for reaching out!",
+            "level": "h1",
+            "align": "left",
+            "color": "#1a241e"
+          }
+        },
+        {
+          "id": "block-hero-text",
+          "type": "text",
+          "content": {
+            "text": "Thank you for getting in touch with our team. We received your details and are preparing the information you requested.\n\nOur team will review your inquiry and follow up shortly with next steps.",
+            "align": "left",
+            "color": "#46564c"
+          }
+        },
+        {
+          "id": "block-feature",
+          "type": "feature",
+          "content": {
+            "badge": "NEXT STEPS",
+            "title": "What happens next?",
+            "description": "1. Our team reviews your inquiry.\n2. We reach out to understand your requirements.\n3. We share relevant information and answer your questions.",
+            "bg": "#f3f8f5"
+          }
+        },
+        {
+          "id": "block-cta",
+          "type": "button",
+          "content": {
+            "text": "Visit Our Website →",
+            "url": "https://example.com",
+            "align": "center",
+            "bgColor": "#176b4b",
+            "textColor": "#ffffff",
+            "borderRadius": 8
+          }
+        },
+        {
+          "id": "block-divider",
+          "type": "divider",
+          "content": {
+            "color": "#e5eae6",
+            "margin": 20
+          }
+        },
+        {
+          "id": "block-footer",
+          "type": "footer",
+          "content": {
+            "company": "{{company}}",
+            "address": "Sent to {{email}} because you requested information from us.",
+            "unsubscribeText": "Unsubscribe from communications"
+          }
+        }
+      ],
+      "settings": {
+        "subject": "Thanks for connecting, {{name}}! Here is your requested info",
+        "preheader": "We received your inquiry and our team is ready to help.",
+        "backgroundColor": "#f4f6f4",
+        "cardColor": "#ffffff",
+        "primaryColor": "#176b4b",
+        "fontFamily": "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+      },
+      "version": 2
+    },
+    "version_number": 1,
+    "last_used_at": null,
+    "created_at": "2026-10-16T07:32:39.164Z",
+    "updated_at": "2026-10-16T07:32:39.164Z"
   }
 ]

@@ -15,7 +15,7 @@ Client lead and email workspace: Meta Lead Ads → client-owned Google Sheet →
 ## Setup
 
 1. Install the frontend dependencies in the project root, and backend dependencies with `cd server && npm install`.
-2. Apply `server/migrations/001_initial.sql` to a dedicated Supabase project. Insert a workspace row and configure its UUID.
+2. Apply `server/migrations/001_initial.sql` to a dedicated Supabase project. Insert a workspace row and configure its UUID. Apply migrations `002` through `006` in order for templates, integrations, and welcome-email settings.
 3. Copy `server/.env.example` to `server/.env` and configure Supabase, Redis, a long random API token, the sheet sync token, and verified ZeptoMail sender credentials.
 4. Configure the private API token and API URL for local development in `.env.local` (see root `.env.example`). Never expose a production shared token in a public Vite build; add a client login/session flow before public release.
 5. Start Redis, then the backend and Vite client.
@@ -25,6 +25,12 @@ CSV import and automatic Google Sheets polling are implemented. Sync requires th
 ## Templates and scheduling
 
 Saved templates are workspace-scoped records in `email_templates`. The campaign composer can select one, select recipients, and either enqueue immediately or choose a future date/time. Scheduled jobs are stored with `scheduled_at` and submitted to BullMQ with a delay; Redis must remain available so the delayed job can be released. Apply migration `002_templates_and_scheduling.sql` to an existing install. New installations can use the updated `001_initial.sql`.
+
+Apply `server/migrations/006_workspace_email_settings.sql` to existing databases to enable explicit welcome-template selection. In the Templates page, select the saved template for new leads and confirm that ZeptoMail shows as ready. New leads arriving through Sheets sync, CSV import, or the secure server-side form hook use this configured template. Delivery requires `ZEPTOMAIL_API_KEY` and a verified `ZEPTOMAIL_FROM_EMAIL`.
+
+### Website form integration
+
+For a website form, have its **server-side** handler call `POST /v1/integrations/leads/form` with `X-Sync-Token: <SHEETS_SYNC_TOKEN>` and JSON such as `{"lead":{"email":"person@example.com","name":"Person","phone":"+1 555 0100","company":"Example","campaign":"Contact form"}}`. The API uses `MAILBPOX_WORKSPACE_ID`, deduplicates by email, and runs the configured welcome-email flow for a new contact. Keep the token on the form server; never embed it in browser JavaScript. The hook requires `SHEETS_SYNC_TOKEN` and a configured workspace.
 
 ## Google Sheets automatic sync
 

@@ -42,9 +42,12 @@ import { ApiError } from './services/http';
 import { leadsApi } from './services/leadsApi';
 import { campaignsApi, dashboardApi } from './services/campaignsApi';
 import { parseLeadCsv, downloadLeadCsv } from './features/leads/csv';
-import { templatesApi, type EmailTemplate } from './services/templatesApi';
+import { templatesApi, emailSettingsApi, suppressionApi, type EmailTemplate, type EmailSettings, type SuppressionEntry } from './services/templatesApi';
 import { googleSheetsApi, type SheetsSyncStatus } from './services/googleSheetsApi';
 import { TemplateStudio } from './features/templates/TemplateStudio';
+import { LoginPage } from './features/auth/LoginPage';
+import { authApi, type AuthUser } from './services/authApi';
+import { LogOut } from 'lucide-react';
 
 type UiLead = Lead & { date: string };
 
@@ -67,12 +70,23 @@ function getGreeting() {
 }
 
 function App() {
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
+    try {
+      const saved = localStorage.getItem('mailbox_auth_user');
+      const token = localStorage.getItem('mailbox_auth_token');
+      return saved && token ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [authChecking, setAuthChecking] = useState(true);
+
   const [leads, setLeads] = useState<UiLead[]>([]);
   const [stats, setStats] = useState({ totalLeads: 0, newLeads: 0, contactedLeads: 0 });
   const [recentCampaigns, setRecentCampaigns] = useState<any[]>([]);
   const [dataReady, setDataReady] = useState(false);
   const [serviceError, setServiceError] = useState('');
-  const [active, setActive] = useState<'Overview' | 'Leads' | 'Campaigns' | 'Templates' | 'Calendar'>('Leads');
+  const [active, setActive] = useState<'Overview' | 'Leads' | 'Campaigns' | 'Templates' | 'Calendar' | 'Suppression list' | 'Settings'>('Leads');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('All leads');
   const [timeRange, setTimeRange] = useState<'all' | 'today' | '7days' | '30days' | '90days' | 'year'>('all');
@@ -80,6 +94,14 @@ function App() {
   const [modal, setModal] = useState<'import' | 'campaign' | null>(null);
   const [templateStudioOpen,setTemplateStudioOpen]=useState(false);
   const [templates,setTemplates]=useState<EmailTemplate[]>([]);
+  const [emailSettings,setEmailSettings]=useState<EmailSettings|null>(null);
+  const [emailSettingsError,setEmailSettingsError]=useState('');
+  const [savingEmailSettings,setSavingEmailSettings]=useState(false);
+  const [settingsNotice,setSettingsNotice]=useState('');
+  const [notificationsOpen,setNotificationsOpen]=useState(false);
+  const [openLeadActions,setOpenLeadActions]=useState<string|null>(null);
+  const [sortNewestFirst,setSortNewestFirst]=useState(true);
+  const [leadPage,setLeadPage]=useState(1);
   const [sheetsStatus,setSheetsStatus]=useState<SheetsSyncStatus|null>(null);
   const [sheetSetupOpen,setSheetSetupOpen]=useState(false);
   const [sheetUrl,setSheetUrl]=useState('');
@@ -102,26 +124,47 @@ function App() {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [suppressionEntries,setSuppressionEntries]=useState<SuppressionEntry[]>([]);
+  const [suppressionEmail,setSuppressionEmail]=useState('');
+  const [suppressionReason,setSuppressionReason]=useState<SuppressionEntry['reason']>('manual');
+  const [suppressionLoading,setSuppressionLoading]=useState(false);
+  const [suppressionSaving,setSuppressionSaving]=useState(false);
+  const [suppressionError,setSuppressionError]=useState('');
 
   const fileRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  const handleLogout = () => {
+    localStorage.removeItem('mailbox_auth_token');
+    localStorage.removeItem('mailbox_auth_user');
+    setCurrentUser(null);
+  };
+
   const fetchWorkspaceData = async () => {
+    if (!localStorage.getItem('mailbox_auth_token')) return;
     setIsRetrying(true);
     try {
-      const [result, dashboard, templateResult, campaignResult, sheetStatus] = await Promise.all([leadsApi.list(), dashboardApi.stats(), templatesApi.list(), campaignsApi.list(), googleSheetsApi.status()]);
+      const settingsRequest = emailSettingsApi.get().then(value => ({ value, error: '' })).catch(error => ({ value: null, error: error instanceof Error ? error.message : 'Email settings request failed.' }));
+      const [result, dashboard, templateResult, campaignResult, sheetStatus, settingsResult] = await Promise.all([leadsApi.list(), dashboardApi.stats(), templatesApi.list(), campaignsApi.list(), googleSheetsApi.status(), settingsRequest]);
       setLeads(result.leads.map(toUiLead));
       setStats(dashboard.stats);
       setRecentCampaigns(campaignResult.campaigns.length?campaignResult.campaigns:dashboard.recentCampaigns);
       setTemplates(templateResult.templates);
+      setEmailSettings(settingsResult.value);
+      setEmailSettingsError(settingsResult.error);
       setSheetsStatus(sheetStatus);
+      try { const suppressionResult=await suppressionApi.list(); setSuppressionEntries(suppressionResult.entries); } catch { /* fetched again on the suppression page */ }
       setServiceError('');
       setDataReady(true);
     } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        handleLogout();
+        return;
+      }
       setServiceError(
         error instanceof ApiError && error.status === 503
           ? error.message
-          : 'Mailbox API server is offline. Run `cd server && npm run dev` to sync live database leads and dispatch campaigns.'
+          : 'Mailbox API server is offline. Check server connection.'
       );
       setDataReady(true);
     } finally {
@@ -130,7 +173,22 @@ function App() {
   };
 
   useEffect(() => {
-    void fetchWorkspaceData();
+    const token = localStorage.getItem('mailbox_auth_token');
+    if (!token) {
+      setAuthChecking(false);
+      return;
+    }
+    authApi.me()
+      .then((res) => {
+        setCurrentUser(res.user);
+        void fetchWorkspaceData();
+      })
+      .catch(() => {
+        handleLogout();
+      })
+      .finally(() => {
+        setAuthChecking(false);
+      });
   }, []);
 
   useEffect(()=>{const url=new URL(window.location.href);const result=url.searchParams.get('google');if(result){window.history.replaceState({},'',url.pathname);if(result==='connected'){setNotice('Google account connected. Add your spreadsheet link to finish setup.');setSheetSetupOpen(true);}else if(result==='cancelled')setNotice('Google connection was cancelled.');else setNotice('Google could not be connected. Check server OAuth settings and try again.');void googleSheetsApi.status().then(setSheetsStatus).catch(()=>{});}},[]);
@@ -181,7 +239,29 @@ function App() {
     });
   }, [leads, query, filter, timeRange]);
 
-  const selectedRangeCount = filtered.length;
+  const sortedFiltered = useMemo(() => [...filtered].sort((a, b) => {
+    const delta = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    return sortNewestFirst ? -delta : delta;
+  }), [filtered, sortNewestFirst]);
+  const leadsPerPage = 25;
+  const pageCount = Math.max(1, Math.ceil(sortedFiltered.length / leadsPerPage));
+  const visibleLeads = sortedFiltered.slice((leadPage - 1) * leadsPerPage, leadPage * leadsPerPage);
+
+  useEffect(() => { setLeadPage(1); }, [query, filter, timeRange]);
+
+  const selectedRangeCount = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const starts: Record<typeof timeRange, number> = {
+      all: Number.NEGATIVE_INFINITY,
+      today: today.getTime(),
+      '7days': today.getTime() - 6 * 24 * 60 * 60 * 1000,
+      '30days': today.getTime() - 29 * 24 * 60 * 60 * 1000,
+      '90days': today.getTime() - 89 * 24 * 60 * 60 * 1000,
+      year: new Date(today.getFullYear(), 0, 1).getTime(),
+    };
+    return leads.filter(lead => new Date(lead.createdAt).getTime() >= starts[timeRange]).length;
+  }, [leads, timeRange]);
 
   const toggle = (id: string) =>
     setSelected(s => (s.includes(id) ? s.filter(x => x !== id) : [...s, id]));
@@ -344,6 +424,119 @@ function App() {
     return leads.filter(l => new Date(l.createdAt) >= sevenDaysAgo).length;
   }, [leads]);
 
+  const welcomeTemplate = emailSettings?.welcomeTemplate || null;
+  const welcomeEmailSummary = useMemo(() => ({
+    sent: leads.filter(lead => lead.welcomeEmailStatus === 'sent' || lead.welcomeEmailStatus === 'delivered').length,
+    sending: leads.filter(lead => lead.welcomeEmailStatus === 'queued' || lead.welcomeEmailStatus === 'scheduled' || lead.welcomeEmailStatus === 'sending').length,
+    failed: leads.filter(lead => lead.welcomeEmailStatus === 'failed' || lead.welcomeEmailStatus === 'bounced').length,
+    notSent: leads.filter(lead => !lead.welcomeEmailStatus).length,
+  }), [leads]);
+
+  const welcomeSummaryPanel = (
+    <div className="welcome-summary-panel">
+      <div className="welcome-summary-heading">
+        <span className="welcome-summary-icon"><MailCheck size={17}/></span>
+        <div><h2>Welcome email</h2><p>{welcomeTemplate ? `Automatic · ${welcomeTemplate.name}` : 'Not configured'}</p></div>
+        <span className={`welcome-setup-badge ${welcomeTemplate && emailSettings?.provider.configured ? 'active' : 'needs-setup'}`}>{!welcomeTemplate ? 'Setup needed' : emailSettings?.provider.configured ? 'Configured' : 'Provider setup needed'}</span>
+      </div>
+      <div className="welcome-summary-counts">
+        <div><b>{welcomeEmailSummary.sent}</b><span>Sent</span></div>
+        <div><b>{welcomeEmailSummary.sending}</b><span>In progress</span></div>
+        <div><b>{welcomeEmailSummary.failed}</b><span>Failed</span></div>
+        <div><b>{welcomeEmailSummary.notSent}</b><span>Not sent</span></div>
+      </div>
+      <p className="welcome-summary-help">{welcomeTemplate ? `New leads from Sheets, CSV, or the secure form hook use this template. ${emailSettings?.provider.configured ? `ZeptoMail credentials are present for ${emailSettings.provider.sender}; actual delivery is reflected per lead.` : 'Set valid ZeptoMail credentials on the server before sending.'}` : 'Choose a saved template for automatic new-lead emails.'} Counts cover all {leads.length} leads currently synced.</p>
+      <button className="link-button" onClick={() => setActive('Templates')}>{welcomeTemplate ? 'Edit welcome template' : 'Set up welcome email'} <ArrowRight size={13}/></button>
+    </div>
+  );
+
+  const saveWelcomeTemplate = async (templateId: string) => {
+    setSavingEmailSettings(true);
+    setSettingsNotice('');
+    try {
+      const result = await emailSettingsApi.saveWelcome(templateId || null);
+      setEmailSettings(result);
+      setEmailSettingsError('');
+      setSettingsNotice(templateId ? 'Welcome email automation saved.' : 'Welcome email automation turned off.');
+      void fetchWorkspaceData();
+    } catch (error) {
+      setSettingsNotice(error instanceof Error ? error.message : 'Could not save email settings. Apply migration 006 and try again.');
+    } finally {
+      setSavingEmailSettings(false);
+    }
+  };
+
+  const loadSuppressionEntries = async () => {
+    setSuppressionLoading(true);
+    setSuppressionError('');
+    try { const result=await suppressionApi.list(); setSuppressionEntries(result.entries); }
+    catch(error) { setSuppressionError(error instanceof Error ? error.message : 'Could not load suppression list.'); }
+    finally { setSuppressionLoading(false); }
+  };
+
+  const addSuppressionAddress = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!suppressionEmail.trim()) return;
+    setSuppressionSaving(true); setSuppressionError('');
+    try {
+      const result=await suppressionApi.add(suppressionEmail,suppressionReason);
+      setSuppressionEntries(current=>[result.entry,...current.filter(item=>item.id!==result.entry.id)]);
+      setSuppressionEmail(''); setNotice('Address added to the suppression list. Campaigns will skip it.');
+    } catch(error) { setSuppressionError(error instanceof Error ? error.message : 'Could not add this address.'); }
+    finally { setSuppressionSaving(false); }
+  };
+
+  const removeSuppressionAddress = async (entry: SuppressionEntry) => {
+    try {
+      await suppressionApi.remove(entry.id);
+      setSuppressionEntries(current=>current.filter(item=>item.id!==entry.id));
+      setNotice(`${entry.email} removed from the suppression list.`);
+    } catch(error) { setSuppressionError(error instanceof Error ? error.message : 'Could not remove this address.'); }
+  };
+
+  const updateLeadStatus = async (lead: UiLead) => {
+    const status = lead.status === 'contacted' ? 'new' : 'contacted';
+    try {
+      await leadsApi.updateStatus(lead.id, status);
+      setLeads(current => current.map(item => item.id === lead.id ? { ...item, status } : item));
+      setStats(current => ({ ...current, newLeads: Math.max(0, current.newLeads + (status === 'new' ? 1 : 0) - (lead.status === 'new' ? 1 : 0)), contactedLeads: Math.max(0, current.contactedLeads + (status === 'contacted' ? 1 : 0) - (lead.status === 'contacted' ? 1 : 0)) }));
+      setNotice(status === 'contacted' ? `${lead.name || lead.email} marked contacted.` : `${lead.name || lead.email} marked new.`);
+      setOpenLeadActions(null);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not update lead status.');
+    }
+  };
+
+  const retryWelcome = async (lead: UiLead) => {
+    try {
+      await leadsApi.retryWelcome(lead.id);
+      setNotice(`Welcome email sent to ${lead.email}.`);
+      setOpenLeadActions(null);
+      void fetchWorkspaceData();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not retry welcome email.');
+    }
+  };
+
+  if (authChecking) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8fafc' }}>
+        <div className="loading-indicator" />
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <LoginPage
+        onSuccess={(user) => {
+          setCurrentUser(user);
+          void fetchWorkspaceData();
+        }}
+      />
+    );
+  }
+
   if(templateStudioOpen)return <TemplateStudio template={editingTemplate} onBack={()=>setTemplateStudioOpen(false)} onSaved={onTemplateSaved}/>;
 
   return (
@@ -412,15 +605,15 @@ function App() {
         <div className="nav-label">MANAGEMENT</div>
         <nav>
           <button
-            className="nav-item"
-            onClick={() => setNotice('Suppression list prevents emailing unsubscribes and bounces.')}
+            className={`nav-item ${active === 'Suppression list' ? 'active' : ''}`}
+            onClick={() => { setActive('Suppression list'); void loadSuppressionEntries(); }}
           >
             <ShieldCheck size={16} />
             <span>Suppression list</span>
           </button>
           <button
-            className="nav-item"
-            onClick={() => setNotice('Workspace settings and team permissions are active.')}
+            className={`nav-item ${active === 'Settings' ? 'active' : ''}`}
+            onClick={() => setActive('Settings')}
           >
             <Settings2 size={16} />
             <span>Settings</span>
@@ -446,15 +639,22 @@ function App() {
             </button>
           </div>
 
-          <div className="profile">
-            <div className="profile-avatar">C</div>
-            <div className="profile-info">
-                <b>Client workspace</b>
-                <small>Single client dashboard</small>
+          <div className="profile" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', overflow: 'hidden' }}>
+              <div className="profile-avatar">{currentUser?.name ? currentUser.name.charAt(0).toUpperCase() : 'M'}</div>
+              <div className="profile-info" style={{ overflow: 'hidden' }}>
+                <b style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentUser?.name || 'Metabull Media'}</b>
+                <small style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentUser?.email || 'Admin'}</small>
+              </div>
             </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
               <button aria-label="Google Sheets settings" onClick={()=>setSheetSetupOpen(true)} title="Google Sheets settings">
-                <Settings2 size={16} />
-            </button>
+                <Settings2 size={15} />
+              </button>
+              <button aria-label="Log out" onClick={handleLogout} title="Log out" style={{ color: '#ef4444' }}>
+                <LogOut size={15} />
+              </button>
+            </div>
           </div>
         </div>
       </aside>
@@ -483,10 +683,13 @@ function App() {
             >
               <HelpCircle size={17} />
             </button>
-            <button className="icon-btn notification" aria-label="Notifications">
-              <Bell size={17} />
-              <i />
-            </button>
+            <div className="header-notifications">
+              <button className="icon-btn notification" aria-label="Notifications" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen(open => !open)}>
+                <Bell size={17} />
+                {(welcomeEmailSummary.failed + welcomeEmailSummary.sending) > 0 && <i />}
+              </button>
+              {notificationsOpen && <div className="notification-popover"><div className="notification-popover-title"><b>Email activity</b><button onClick={() => setNotificationsOpen(false)} aria-label="Close notifications"><X size={14}/></button></div><p>{welcomeEmailSummary.failed} failed · {welcomeEmailSummary.sending} in progress</p>{leads.filter(lead => lead.welcomeEmailStatus === 'failed' || lead.welcomeEmailStatus === 'bounced').slice(0, 5).map(lead => <button className="notification-item" key={lead.id} onClick={() => { setActive('Leads'); setNotificationsOpen(false); setFilter('All leads'); setQuery(lead.email); }}><span className="notification-failure-dot"/><span><b>Welcome email failed</b><small>{lead.email}</small></span><ArrowRight size={13}/></button>)}{welcomeEmailSummary.failed === 0 && <small className="notification-empty">No failed welcome emails in the loaded lead list.</small>}<button className="link-button" onClick={() => { setActive('Leads'); setNotificationsOpen(false); }}>View leads <ArrowRight size={13}/></button></div>}
+            </div>
           </div>
         </header>
 
@@ -574,7 +777,7 @@ function App() {
 
               <div className="stat-card">
                 <div className="stat-top">
-                  <span>Contacted</span>
+                  <span>Contacted leads</span>
                   <span className="stat-icon violet">
                     <MailCheck size={15} />
                   </span>
@@ -600,7 +803,7 @@ function App() {
                       }}
                     />
                   </div>
-                  <span>{stats.contactedLeads.toLocaleString()} contacted</span>
+                  <span>{stats.contactedLeads.toLocaleString()} marked contacted · not email delivery</span>
                 </div>
               </div>
 
@@ -613,13 +816,15 @@ function App() {
                 </div>
                 <div className="stat-value">{stats.newLeads.toLocaleString()}</div>
                 <div className="stat-foot">
-                  <span>Never emailed</span>
+                  <span>Marked with new lead status</span>
                   <button className="inline-arrow" onClick={() => setFilter('New')}>
                     View <ArrowRight size={12} />
                   </button>
                 </div>
               </div>
             </div>
+
+            {welcomeSummaryPanel}
 
             <div className="table-card">
               <div className="table-header">
@@ -682,8 +887,9 @@ function App() {
                   )}
                   <button
                     className="icon-button"
-                    aria-label="Sort by date"
-                    title="Sorted by newest"
+                    aria-label={`Sort by date, currently ${sortNewestFirst ? 'newest first' : 'oldest first'}`}
+                    title={`Sorted ${sortNewestFirst ? 'newest first' : 'oldest first'}`}
+                    onClick={() => setSortNewestFirst(value => !value)}
                   >
                     <ArrowDownUp size={15} />
                   </button>
@@ -741,7 +947,7 @@ function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filtered.map(l => (
+                    {visibleLeads.map(l => (
                       <tr key={l.id}>
                         <td className="check-cell">
                           <input
@@ -790,9 +996,11 @@ function App() {
                           <button
                             className="row-more"
                             aria-label={`More options for ${l.name}`}
+                            onClick={() => setOpenLeadActions(current => current === l.id ? null : l.id)}
                           >
                             <MoreHorizontal size={15} />
                           </button>
+                          {openLeadActions === l.id && <div className="lead-row-menu"><button onClick={() => { void navigator.clipboard?.writeText(l.email).then(() => setNotice(`Copied ${l.email}.`)).catch(() => setNotice('Clipboard access is unavailable in this browser.')); setOpenLeadActions(null); }}>Copy email</button>{['failed','bounced'].includes(l.welcomeEmailStatus || '') && <button onClick={() => { void retryWelcome(l); }}>Retry welcome email</button>}<button onClick={() => { void updateLeadStatus(l); }}>Mark {l.status === 'contacted' ? 'new' : 'contacted'}</button><button onClick={() => { setSelected([l.id]); setModal('campaign'); setCampaignName(''); setSubject(''); setMessage(''); setEmailHtml(''); setSelectedTemplateId(''); setOpenLeadActions(null); }}>Create campaign</button></div>}
                         </td>
                       </tr>
                     ))}
@@ -826,14 +1034,14 @@ function App() {
                 <span>
                   {selected.length
                     ? `${selected.length} selected`
-                    : `Showing ${filtered.length ? 1 : 0}–${filtered.length} of ${leads.length} leads`}
+                    : `Showing ${sortedFiltered.length ? (leadPage - 1) * leadsPerPage + 1 : 0}–${Math.min(leadPage * leadsPerPage, sortedFiltered.length)} of ${sortedFiltered.length} matching · ${leads.length} total`}
                 </span>
                 <div className="pagination">
-                  <button disabled aria-label="Previous page">
+                  <button disabled={leadPage <= 1} onClick={() => setLeadPage(page => Math.max(1, page - 1))} aria-label="Previous page">
                     <ChevronLeft size={14} />
                   </button>
-                  <button className="page-num">1</button>
-                  <button disabled aria-label="Next page">
+                  <span className="page-num">{leadPage} / {pageCount}</span>
+                  <button disabled={leadPage >= pageCount} onClick={() => setLeadPage(page => Math.min(pageCount, page + 1))} aria-label="Next page">
                     <ChevronRight size={14} />
                   </button>
                 </div>
@@ -875,6 +1083,16 @@ function App() {
               </div>
             </div>
 
+            <section className="email-settings-card" aria-labelledby="welcome-settings-title">
+              <div className="email-settings-copy">
+                <h2 id="welcome-settings-title">New lead welcome email</h2>
+                <p>Select the saved email sent automatically when a new lead arrives. Existing leads are not emailed again.</p>
+                <div className={`provider-readiness ${emailSettings?.provider.configured ? 'ready' : 'missing'}`}><span className="provider-readiness-dot" />{emailSettings?.provider.configured ? `ZeptoMail credentials present · ${emailSettings.provider.sender}` : 'ZeptoMail sender credentials are missing on the server'}</div>
+                {settingsNotice && <small className="settings-notice" role="status">{settingsNotice}</small>}
+                {!emailSettings && <small className="settings-notice" role="status">{emailSettingsError || 'Email settings could not be loaded.'}</small>}
+              </div>
+              <label className="welcome-template-select"><span>Automatic welcome template</span><select value={emailSettings?.welcomeTemplateId || ''} onChange={event => void saveWelcomeTemplate(event.target.value)} disabled={savingEmailSettings || !emailSettings}><option value="">Off — do not send automatically</option>{templates.map(template => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
+            </section>
             <div className="stats-grid template-kpis">
               <div className="stat-card">
                 <div className="stat-top">
@@ -907,7 +1125,7 @@ function App() {
                 <article className="template-card" key={t.id}>
                   <div className="template-card-top">
                     <span className="template-preview-icon"><Mail size={20}/></span>
-                    <span className="template-version-badge">v{t.version_number || 1}</span>
+                    <span className={`template-version-badge ${t.id === welcomeTemplate?.id ? 'welcome-template-badge' : ''}`}>{t.id === welcomeTemplate?.id ? 'Auto welcome' : `v${t.version_number || 1}`}</span>
                   </div>
                   <h2>{t.name}</h2>
                   <div className="template-subject-pill">
@@ -961,6 +1179,30 @@ function App() {
           </section>
         ) : active === 'Calendar' ? (
           <section className="page"><div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-dot"/> SEND PLANNING</div><h1>Plan your sends</h1><p>Schedule a saved template for the date and time that works for your audience.</p></div><button className="button primary" onClick={()=>{setScheduleAt('');setModal('campaign')}}><Plus size={16}/> Schedule campaign</button></div><div className="calendar-card"><div className="calendar-toolbar"><div><h2>{calendarMonth.toLocaleDateString('en-US',{month:'long',year:'numeric'})}</h2><p>{recentCampaigns.filter(c=>c.scheduled_at&&new Date(c.scheduled_at).getMonth()===calendarMonth.getMonth()&&new Date(c.scheduled_at).getFullYear()===calendarMonth.getFullYear()).length} scheduled campaigns</p></div><div className="calendar-controls"><button className="button secondary" onClick={()=>setCalendarMonth(new Date())}>Today</button><button className="icon-button" onClick={()=>setCalendarMonth(new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()-1,1))}><ChevronLeft size={16}/></button><button className="icon-button" onClick={()=>setCalendarMonth(new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+1,1))}><ChevronRight size={16}/></button></div></div><div className="calendar-grid">{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=><div className="calendar-weekday" key={day}>{day}</div>)}{Array.from({length:(new Date(calendarMonth.getFullYear(),calendarMonth.getMonth(),1).getDay()+6)%7},(_,i)=><div className="calendar-blank" key={`blank-${i}`}/>)}{Array.from({length:new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+1,0).getDate()},(_,i)=>{const day=i+1;const date=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth(),day);const items=recentCampaigns.filter(c=>c.scheduled_at&&new Date(c.scheduled_at).toDateString()===date.toDateString());return <button className={`calendar-day ${date.toDateString()===new Date().toDateString()?'today':''}`} key={day} onClick={()=>{if(date.getTime()<=Date.now()){setNotice('Choose a future date to schedule this campaign.');return;}setScheduleAt(`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(day).padStart(2,'0')}T10:00`);setModal('campaign')}}><span>{day}</span>{items.map(c=><small key={c.id}><Mail size={11}/>{c.name}</small>)}</button>})}</div></div><div className="scheduled-list"><h2>Upcoming sends</h2>{recentCampaigns.filter(c=>c.scheduled_at&&new Date(c.scheduled_at)>=new Date()).sort((a,b)=>new Date(a.scheduled_at).getTime()-new Date(b.scheduled_at).getTime()).map(c=><div className="scheduled-row" key={c.id}><div className="scheduled-date"><b>{new Date(c.scheduled_at).toLocaleDateString('en-US',{day:'2-digit'})}</b><span>{new Date(c.scheduled_at).toLocaleDateString('en-US',{month:'short'})}</span></div><div><b>{c.name}</b><small>{c.subject} · {new Date(c.scheduled_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</small></div><span className="status contacted"><i/>{c.status}</span></div>)}{!recentCampaigns.some(c=>c.scheduled_at&&new Date(c.scheduled_at)>=new Date())&&<p className="no-scheduled">Nothing scheduled yet. Select a day on the calendar to plan your first send.</p>}</div></section>
+        ) : active === 'Suppression list' ? (
+          <section className="page">
+            <div className="page-heading">
+              <div><div className="eyebrow"><span className="eyebrow-dot"/> DELIVERY PROTECTION</div><h1>Suppression list</h1><p>Addresses here are skipped automatically whenever you send a campaign.</p></div>
+              <button className="button secondary" onClick={()=>void loadSuppressionEntries()} disabled={suppressionLoading}><RefreshCw size={14}/> Refresh</button>
+            </div>
+            <form className="suppression-add-card" onSubmit={event=>void addSuppressionAddress(event)}>
+              <label><span>Email address</span><input type="email" required value={suppressionEmail} onChange={event=>setSuppressionEmail(event.target.value)} placeholder="person@example.com" /></label>
+              <label><span>Reason</span><select value={suppressionReason} onChange={event=>setSuppressionReason(event.target.value as SuppressionEntry['reason'])}><option value="manual">Manual</option><option value="unsubscribe">Unsubscribed</option><option value="bounce">Bounced</option><option value="complaint">Complaint</option></select></label>
+              <button className="button primary" type="submit" disabled={suppressionSaving}>{suppressionSaving?'Adding…':<><Plus size={15}/> Add address</>}</button>
+            </form>
+            {suppressionError&&<p className="suppression-error" role="alert">{suppressionError}</p>}
+            <div className="table-card suppression-table-card"><div className="table-header"><div><h2>Blocked addresses <span className="result-count">{suppressionEntries.length}</span></h2><p>Suppressed recipients are excluded from campaign delivery.</p></div></div><div className="table-wrap"><table><thead><tr><th>EMAIL</th><th>REASON</th><th>ADDED</th><th>ACTION</th></tr></thead><tbody>{suppressionEntries.map(entry=><tr key={entry.id}><td><b>{entry.email}</b></td><td><span className="status unsubscribed"><i/>{entry.reason}</span></td><td>{new Date(entry.created_at).toLocaleDateString()}</td><td><button className="link-button danger-link" onClick={()=>void removeSuppressionAddress(entry)}>Remove</button></td></tr>)}</tbody></table>{suppressionLoading&&!suppressionEntries.length?<div className="empty-state"><p>Loading suppression list…</p></div>:!suppressionEntries.length?<div className="empty-state"><ShieldCheck size={25}/><p>No addresses are suppressed yet.</p></div>:null}</div></div>
+          </section>
+        ) : active === 'Settings' ? (
+          <section className="page">
+            <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-dot"/> WORKSPACE</div><h1>Settings</h1><p>Manage email automation, integrations, and workspace details.</p></div></div>
+            <div className="workspace-settings-grid">
+              <article className="workspace-setting-card"><span className="stat-icon mint"><MailCheck size={17}/></span><div><h2>Welcome email</h2><p>{welcomeTemplate?`Automatic · ${welcomeTemplate.name}`:'No automatic welcome template selected'}</p><small>{emailSettings?.provider.configured?`ZeptoMail sender: ${emailSettings.provider.sender}`:'ZeptoMail sender is not configured on the API.'}</small>{emailSettingsError&&<small className="settings-error">{emailSettingsError}</small>}</div><button className="button secondary" onClick={()=>setActive('Templates')}>Configure</button></article>
+              <article className="workspace-setting-card"><span className="stat-icon blue"><FileSpreadsheet size={17}/></span><div><h2>Google Sheets</h2><p>{sheetsStatus?.googleEmail?`Connected · ${sheetsStatus.googleEmail}`:'Not connected'}</p><small>{sheetsStatus?.configured?`${sheetsStatus.spreadsheetId} · ${sheetsStatus.range}`:'Connect an account and choose a spreadsheet to sync leads.'}</small></div><button className="button secondary" onClick={()=>setSheetSetupOpen(true)}>Manage</button></article>
+              <article className="workspace-setting-card"><span className="stat-icon violet"><ShieldCheck size={17}/></span><div><h2>Suppression list</h2><p>{suppressionEntries.length} blocked {suppressionEntries.length===1?'address':'addresses'}</p><small>Unsubscribes, complaints, bounces, and manual blocks are excluded from sends.</small></div><button className="button secondary" onClick={()=>{setActive('Suppression list');void loadSuppressionEntries();}}>Manage</button></article>
+              <article className="workspace-setting-card"><span className="stat-icon blue"><Users size={17}/></span><div><h2>Signed in as</h2><p>{currentUser?.name||'Workspace admin'}</p><small>{currentUser?.email||'Administrator account'}</small></div><button className="button secondary" onClick={handleLogout}>Sign out</button></article>
+            </div>
+          </section>
         ) : active === 'Campaigns' ? (
           <section className="page">
             <div className="page-heading">
@@ -1072,7 +1314,7 @@ function App() {
                     </div>
                     <div className="stat-value">{stats.newLeads.toLocaleString()}</div>
                     <div className="stat-foot">
-                      <span>Uncontacted leads</span>
+                      <span>Current lead status: new</span>
                     </div>
                   </div>
                 </div>
@@ -1101,6 +1343,7 @@ function App() {
               </div>
 
               <aside className="overview-aside">
+                {welcomeSummaryPanel}
                 <div className="source-card">
                   <div className="source-card-head">
                     <div className="source-icon">

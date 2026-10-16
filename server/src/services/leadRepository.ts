@@ -1,6 +1,6 @@
 import { supabase } from '../supabase.js';
 import type { Lead } from '../types.js';
-import { listTemplates } from './templateRepository.js';
+import { getEmailSettings } from './emailSettings.js';
 import { isSuppressed } from './suppressionService.js';
 import { sendWithZeptoMail } from '../providers/zeptomail.js';
 
@@ -9,14 +9,23 @@ const personalize = (value: string, lead: any) => value.replace(/\{\{\s*(name|em
 
 export async function listLeads(workspaceId: string): Promise<Lead[]> {
   if (!supabase) throw new Error('Supabase is not configured.');
-  const { data, error } = await supabase.from('contacts').select('id,full_name,primary_email,primary_phone,company,source,campaign,status,created_at').eq('workspace_id', workspaceId).order('created_at', { ascending: false }).limit(1000);
-  if (error) throw error;
-  const contacts = data || [];
+  const contacts: any[] = [];
+  const pageSize = 500;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase.from('contacts').select('id,full_name,primary_email,primary_phone,company,source,campaign,status,created_at').eq('workspace_id', workspaceId).order('created_at', { ascending: false }).range(from, from + pageSize - 1);
+    if (error) throw error;
+    contacts.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
   const ids = contacts.map((r: any) => r.id);
-  const jobsResult = ids.length ? await supabase.from('email_jobs').select('contact_id,status,created_at,idempotency_key').eq('workspace_id', workspaceId).in('contact_id', ids).order('created_at', { ascending: false }) : { data: [], error: null };
-  if (jobsResult.error) throw jobsResult.error;
+  const jobs: any[] = [];
+  for (let offset = 0; offset < ids.length; offset += pageSize) {
+    const result = await supabase.from('email_jobs').select('contact_id,status,created_at,idempotency_key').eq('workspace_id', workspaceId).in('contact_id', ids.slice(offset, offset + pageSize)).order('created_at', { ascending: false });
+    if (result.error) throw result.error;
+    jobs.push(...(result.data || []));
+  }
   const welcomeJobs = new Map<string, any>();
-  for (const job of jobsResult.data || []) if (job.contact_id && job.idempotency_key?.startsWith('welcome:') && !welcomeJobs.has(job.contact_id)) welcomeJobs.set(job.contact_id, job);
+  for (const job of jobs) if (job.contact_id && job.idempotency_key?.startsWith('welcome:') && !welcomeJobs.has(job.contact_id)) welcomeJobs.set(job.contact_id, job);
   return contacts.map((r: any) => ({ id: r.id, name: r.full_name || '', email: r.primary_email, phone: r.primary_phone, company: r.company, source: r.source || 'Spreadsheet', campaign: r.campaign, status: r.status || 'new', createdAt: r.created_at, welcomeEmailStatus: welcomeJobs.get(r.id)?.status || null, welcomeEmailAt: welcomeJobs.get(r.id)?.created_at || null }));
 }
 
@@ -34,8 +43,13 @@ export async function upsertLeads(rows: Array<Record<string, unknown>>, workspac
   const newLeads = (saved || []).filter((lead: any) => !existingByEmail.has(String(lead.primary_email).toLowerCase()));
   if (newLeads.length) {
     try {
-      const templates = await listTemplates(id);
-      const template = templates.find((item: any) => /welcome/i.test(item.name));
+      const settings = await getEmailSettings(id);
+      let template: any = null;
+      if (settings.welcomeTemplateId) {
+        const result = await supabase.from('email_templates').select('id,name,subject,html_source').eq('workspace_id', id).eq('id', settings.welcomeTemplateId).maybeSingle();
+        if (result.error) throw result.error;
+        template = result.data;
+      }
       if (template) {
         for (const lead of newLeads) {
           if (await isSuppressed(lead.primary_email, id)) continue;
@@ -98,4 +112,38 @@ export async function upsertLeads(rows: Array<Record<string, unknown>>, workspac
     }
   }
   return { imported: data.length };
+}
+
+export async function retryWelcomeEmail(contactId: string, workspaceId: string) {
+  if (!supabase) throw new Error('Supabase is not configured.');
+  const { data: lead, error: leadError } = await supabase.from('contacts')
+    .select('id,primary_email,full_name,primary_phone,company,campaign')
+    .eq('workspace_id', workspaceId).eq('id', contactId).maybeSingle();
+  if (leadError) throw leadError;
+  if (!lead) throw new Error('Lead not found.');
+  const jobId = `welcome:${lead.id}`;
+  const { data: job, error: jobError } = await supabase.from('email_jobs')
+    .select('status,attempts').eq('workspace_id', workspaceId).eq('idempotency_key', jobId).maybeSingle();
+  if (jobError) throw jobError;
+  if (!job || !['failed', 'bounced'].includes(job.status)) throw new Error('Only a failed welcome email can be retried.');
+  if (await isSuppressed(lead.primary_email, workspaceId)) throw new Error('This address is suppressed and cannot be emailed.');
+  const settings = await getEmailSettings(workspaceId);
+  if (!settings.welcomeTemplateId) throw new Error('Choose a welcome template before retrying.');
+  const { data: template, error: templateError } = await supabase.from('email_templates')
+    .select('subject,html_source').eq('workspace_id', workspaceId).eq('id', settings.welcomeTemplateId).maybeSingle();
+  if (templateError) throw templateError;
+  if (!template) throw new Error('The selected welcome template is unavailable.');
+  const leadData = { name: lead.full_name || lead.primary_email.split('@')[0], email: lead.primary_email, phone: lead.primary_phone || '', company: lead.company || '', campaign: lead.campaign || 'Lead form' };
+  await supabase.from('email_jobs').update({ status: 'sending', attempts: (job.attempts || 0) + 1, last_error: null }).eq('idempotency_key', jobId);
+  try {
+    const sent = await sendWithZeptoMail({ to: lead.primary_email, name: leadData.name, subject: personalize(template.subject, leadData), html: personalize(template.html_source, leadData) });
+    const messageId = (sent as any)?.data?.[0]?.message_id || null;
+    await supabase.from('email_jobs').update({ status: 'sent', provider: 'zeptomail', provider_message_id: messageId, last_error: null }).eq('idempotency_key', jobId);
+    await supabase.from('email_events').insert({ workspace_id: workspaceId, campaign_id: null, email: lead.primary_email, event_type: 'sent', event_data: { provider: 'zeptomail', messageId, type: 'welcome', retry: true } });
+    return { status: 'sent' as const };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Email delivery failed.';
+    await supabase.from('email_jobs').update({ status: 'failed', last_error: message }).eq('idempotency_key', jobId);
+    throw new Error(message);
+  }
 }

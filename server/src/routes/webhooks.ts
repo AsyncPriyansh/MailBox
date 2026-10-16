@@ -22,4 +22,21 @@ export async function registerSheetWebhook(app: FastifyInstance) {
     return syncMetaLeadSheet(body.data.rows, process.env.MAILBPOX_WORKSPACE_ID||'');
   });
 
+  // Secure server-to-server hook for website form handlers. Keep the token on
+  // the form server/Zapier side; never place it in browser JavaScript.
+  app.post('/v1/integrations/leads/form', async (req, reply) => {
+    const token = process.env.SHEETS_SYNC_TOKEN;
+    if (!token || req.headers['x-sync-token'] !== token) return reply.code(401).send({ error: 'Invalid lead-form integration token' });
+    const body = z.object({ lead: row }).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'Invalid form lead' });
+    const workspaceId = process.env.MAILBPOX_WORKSPACE_ID;
+    if (!workspaceId) return reply.code(503).send({ error: 'Workspace is not configured.' });
+    try {
+      const result = await syncMetaLeadSheet([{ ...body.data.lead, source: 'Website form' }], workspaceId);
+      return { accepted: true, imported: result.imported };
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : 'Could not process form lead.' });
+    }
+  });
+
 }

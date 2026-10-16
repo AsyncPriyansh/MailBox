@@ -21,4 +21,4 @@ export const authApi = {
   me: async (): Promise<{ user: AuthUser }> => {
     return request<{ user: AuthUser }>('/v1/auth/me');
   },
-};11
+};

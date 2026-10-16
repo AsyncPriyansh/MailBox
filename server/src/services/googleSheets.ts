@@ -14,8 +14,9 @@ function mapRows(values:unknown[][]){
  const headers=values[0].map(value=>normalizeHeader(String(value??'')));
  const find=(...aliases:string[])=>{for(const alias of aliases){const at=headers.findIndex(header=>header===alias);if(at>=0)return at;}return-1;};
  const email=find('email','e_mail');if(email<0)throw new Error('The selected tab needs an Email column in the first row.');
- const name=find('full_name','name','contact_name'),first=find('first_name'),last=find('last_name'),phone=find('phone','mobile','telephone'),company=find('company','business'),campaign=find('campaign','ad_name','form_name');
- return values.slice(1).filter(row=>String(row[email]??'').trim().includes('@')).map(row=>({email:String(row[email]).trim(),name:name>=0?String(row[name]??'').trim():[first>=0?String(row[first]??'').trim():'',last>=0?String(row[last]??'').trim():''].filter(Boolean).join(' '),phone:phone>=0?String(row[phone]??'').trim():undefined,company:company>=0?String(row[company]??'').trim():undefined,campaign:campaign>=0?String(row[campaign]??'').trim():undefined,source:'Meta Lead Ads (Google Sheets)'}));
+ const name=find('full_name','name','contact_name'),first=find('first_name'),last=find('last_name'),phone=find('phone_number','phone','mobile','telephone'),company=find('company','business'),campaign=find('campaign_name','campaign'),formName=find('form_name'),leadStatus=find('lead_status');
+ const cell=(row:unknown[],at:number)=>at>=0?String(row[at]??'').trim():'';
+ return values.slice(1).filter(row=>cell(row,email).includes('@')).map(row=>({email:cell(row,email),name:name>=0?cell(row,name):[cell(row,first),cell(row,last)].filter(Boolean).join(' '),phone:cell(row,phone).replace(/^p:/i,'')||undefined,company:cell(row,company)||undefined,campaign:cell(row,campaign)||undefined,formName:cell(row,formName)||undefined,sourceLeadStatus:cell(row,leadStatus)||undefined,source:'Meta Lead Ads (Google Sheets)'}));
 }
 
 async function connection(workspaceId:string){

@@ -36,13 +36,14 @@ import {
   Sparkles,
   Users,
   X,
+  Trash2,
 } from 'lucide-react';
 import type { Lead } from './types/domain';
 import { ApiError } from './services/http';
 import { leadsApi } from './services/leadsApi';
 import { campaignsApi, dashboardApi } from './services/campaignsApi';
 import { parseLeadCsv, downloadLeadCsv } from './features/leads/csv';
-import { templatesApi, emailSettingsApi, suppressionApi, type EmailTemplate, type EmailSettings, type SuppressionEntry } from './services/templatesApi';
+import { templatesApi, emailSettingsApi, type EmailTemplate, type EmailSettings } from './services/templatesApi';
 import { googleSheetsApi, type SheetsSyncStatus } from './services/googleSheetsApi';
 import { TemplateStudio } from './features/templates/TemplateStudio';
 import { LoginPage } from './features/auth/LoginPage';
@@ -119,17 +120,19 @@ function App() {
   const [calendarMonth,setCalendarMonth]=useState(()=>new Date());
   const [fileName, setFileName] = useState('meta-leads-october.csv');
   const [notice, setNotice] = useState('');
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean;
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    isDestructive?: boolean;
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
   const [campaignName, setCampaignName] = useState('');
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
-  const [suppressionEntries,setSuppressionEntries]=useState<SuppressionEntry[]>([]);
-  const [suppressionEmail,setSuppressionEmail]=useState('');
-  const [suppressionReason,setSuppressionReason]=useState<SuppressionEntry['reason']>('manual');
-  const [suppressionLoading,setSuppressionLoading]=useState(false);
-  const [suppressionSaving,setSuppressionSaving]=useState(false);
-  const [suppressionError,setSuppressionError]=useState('');
 
   const fileRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -153,7 +156,6 @@ function App() {
       setEmailSettings(settingsResult.value);
       setEmailSettingsError(settingsResult.error);
       setSheetsStatus(sheetStatus);
-      try { const suppressionResult=await suppressionApi.list(); setSuppressionEntries(suppressionResult.entries); } catch { /* fetched again on the suppression page */ }
       setServiceError('');
       setDataReady(true);
     } catch (error) {
@@ -227,7 +229,7 @@ function App() {
     };
 
     return leads.filter(l => {
-      const matchesQuery = `${l.name} ${l.email} ${l.company || ''} ${l.campaign || ''}`
+      const matchesQuery = `${l.name} ${l.email} ${l.phone||''} ${l.company || ''} ${l.campaign || ''} ${l.formName||''} ${l.sourceLeadStatus||''}`
         .toLowerCase()
         .includes(query.toLowerCase());
       if (!matchesQuery) return false;
@@ -312,6 +314,29 @@ function App() {
   };
 
   const onTemplateSaved=(template:EmailTemplate)=>{setTemplates(current=>[template,...current.filter(item=>item.id!==template.id)]);setEditingTemplate(template);setTemplateStudioOpen(false);setNotice(`Saved “${template.name}” as version ${template.version_number}.`);};
+
+  const handleDeleteTemplate = (template: EmailTemplate) => {
+    setConfirmDialog({
+      open: true,
+      title: 'Delete template',
+      message: `Are you sure you want to delete "${template.name}"? This action cannot be undone.`,
+      confirmLabel: 'Delete template',
+      isDestructive: true,
+      onConfirm: async () => {
+        try {
+          await templatesApi.remove(template.id);
+          setTemplates(current => current.filter(t => t.id !== template.id));
+          if (emailSettings?.welcomeTemplateId === template.id) {
+            await emailSettingsApi.saveWelcome(null);
+            setEmailSettings(current => current ? { ...current, welcomeTemplateId: null, welcomeTemplate: null } : null);
+          }
+          setNotice(`Deleted template "${template.name}".`);
+        } catch (err: any) {
+          setNotice(err?.message || 'Failed to delete template.');
+        }
+      }
+    });
+  };
 
   const savePastedTemplate = async (e: FormEvent) => {
     e.preventDefault();
@@ -425,6 +450,7 @@ function App() {
   }, [leads]);
 
   const welcomeTemplate = emailSettings?.welcomeTemplate || null;
+  const hasMetaFormDetails = leads.some(lead => lead.formName || lead.sourceLeadStatus);
   const welcomeEmailSummary = useMemo(() => ({
     sent: leads.filter(lead => lead.welcomeEmailStatus === 'sent' || lead.welcomeEmailStatus === 'delivered').length,
     sending: leads.filter(lead => lead.welcomeEmailStatus === 'queued' || lead.welcomeEmailStatus === 'scheduled' || lead.welcomeEmailStatus === 'sending').length,
@@ -464,34 +490,6 @@ function App() {
     } finally {
       setSavingEmailSettings(false);
     }
-  };
-
-  const loadSuppressionEntries = async () => {
-    setSuppressionLoading(true);
-    setSuppressionError('');
-    try { const result=await suppressionApi.list(); setSuppressionEntries(result.entries); }
-    catch(error) { setSuppressionError(error instanceof Error ? error.message : 'Could not load suppression list.'); }
-    finally { setSuppressionLoading(false); }
-  };
-
-  const addSuppressionAddress = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!suppressionEmail.trim()) return;
-    setSuppressionSaving(true); setSuppressionError('');
-    try {
-      const result=await suppressionApi.add(suppressionEmail,suppressionReason);
-      setSuppressionEntries(current=>[result.entry,...current.filter(item=>item.id!==result.entry.id)]);
-      setSuppressionEmail(''); setNotice('Address added to the suppression list. Campaigns will skip it.');
-    } catch(error) { setSuppressionError(error instanceof Error ? error.message : 'Could not add this address.'); }
-    finally { setSuppressionSaving(false); }
-  };
-
-  const removeSuppressionAddress = async (entry: SuppressionEntry) => {
-    try {
-      await suppressionApi.remove(entry.id);
-      setSuppressionEntries(current=>current.filter(item=>item.id!==entry.id));
-      setNotice(`${entry.email} removed from the suppression list.`);
-    } catch(error) { setSuppressionError(error instanceof Error ? error.message : 'Could not remove this address.'); }
   };
 
   const updateLeadStatus = async (lead: UiLead) => {
@@ -606,10 +604,11 @@ function App() {
         <nav>
           <button
             className={`nav-item ${active === 'Suppression list' ? 'active' : ''}`}
-            onClick={() => { setActive('Suppression list'); void loadSuppressionEntries(); }}
+            onClick={() => setActive('Suppression list')}
           >
             <ShieldCheck size={16} />
             <span>Suppression list</span>
+            <small className="coming-soon-badge">Soon</small>
           </button>
           <button
             className={`nav-item ${active === 'Settings' ? 'active' : ''}`}
@@ -694,11 +693,57 @@ function App() {
         </header>
 
         {notice && (
-          <div className="toast">
-            <CheckCircle2 size={16} />
-            <span>{notice}</span>
-            <button onClick={() => setNotice('')} aria-label="Dismiss toast">
-              <X size={15} />
+          <div
+            className="modern-notice-banner"
+            role="alert"
+            style={{
+              position: 'fixed',
+              top: '24px',
+              right: '24px',
+              zIndex: 9999,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              padding: '14px 18px',
+              backgroundColor: '#ffffff',
+              borderRadius: '12px',
+              border: '1px solid #e2e8f0',
+              boxShadow: '0 12px 30px -4px rgba(15, 23, 42, 0.12), 0 4px 6px -2px rgba(15, 23, 42, 0.05)',
+              maxWidth: '460px',
+              animation: 'modal-in 0.2s ease-out'
+            }}
+          >
+            <div style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: '8px',
+              backgroundColor: '#ecfdf5',
+              color: '#059669',
+              display: 'grid',
+              placeItems: 'center',
+              flexShrink: 0
+            }}>
+              <CheckCircle2 size={18} />
+            </div>
+            <div style={{ flex: 1, fontSize: '0.875rem', color: '#1e293b', fontWeight: 500, lineHeight: 1.4 }}>
+              {notice}
+            </div>
+            <button
+              onClick={() => setNotice('')}
+              aria-label="Dismiss message"
+              style={{
+                border: 'none',
+                background: 'transparent',
+                color: '#94a3b8',
+                cursor: 'pointer',
+                padding: '4px',
+                display: 'grid',
+                placeItems: 'center',
+                borderRadius: '6px',
+                transition: 'color 0.15s ease'
+              }}
+            >
+              <X size={16} />
             </button>
           </div>
         )}
@@ -832,7 +877,7 @@ function App() {
                   <h2>
                     All leads <span className="result-count">{filtered.length}</span>
                   </h2>
-                  <p>Contacts synchronized from your Meta Lead Ads.</p>
+                  <p>Contacts synchronized from your Meta Lead Ads.{!hasMetaFormDetails?' Import or sync the latest Meta export to fill in form and Meta status.':''}</p>
                 </div>
                 <div className="table-actions">
                   <label className="searchbox">
@@ -841,10 +886,22 @@ function App() {
                       ref={searchInputRef}
                       value={query}
                       onChange={e => setQuery(e.target.value)}
-                      placeholder="Search name, email, company…"
+                      placeholder="Search name, email, phone, campaign, form…"
                     />
                     <kbd>⌘ K</kbd>
                   </label>
+                  <select
+                    className="filter-select"
+                    value={filter}
+                    onChange={e => setFilter(e.target.value)}
+                    aria-label="Filter leads by status"
+                  >
+                    <option value="All leads">All statuses</option>
+                    <option value="New">New</option>
+                    <option value="Contacted">Contacted</option>
+                    <option value="Qualified">Qualified</option>
+                    <option value="Unsubscribed">Unsubscribed</option>
+                  </select>
                   <select
                     className="filter-select"
                     value={timeRange}
@@ -937,10 +994,11 @@ function App() {
                         />
                       </th>
                       <th>LEAD</th>
-                      <th>COMPANY</th>
                       <th>SOURCE</th>
                       <th>CAMPAIGN</th>
+                      <th>FORM</th>
                       <th>STATUS</th>
+                      <th>META STATUS</th>
                       <th>WELCOME EMAIL</th>
                       <th>ADDED</th>
                       <th />
@@ -974,22 +1032,24 @@ function App() {
                             <div>
                               <b>{l.name}</b>
                               <span>{l.email}</span>
+                              {l.phone&&<span className="lead-phone">{l.phone}</span>}
                             </div>
                           </div>
                         </td>
-                        <td className="company-cell">{l.company || '—'}</td>
                         <td>
                           <span className="meta-source">
                             <span className="meta-glyph">f</span> Meta Ads
                           </span>
                         </td>
                         <td className="campaign-cell">{l.campaign || '—'}</td>
+                        <td className="campaign-cell">{l.formName || '—'}</td>
                         <td>
                           <span className={`status ${statusClass(l.status)}`}>
                             <i />
                             {l.status.charAt(0).toUpperCase() + l.status.slice(1)}
                           </span>
                         </td>
+                        <td>{l.sourceLeadStatus ? <span className="meta-lead-status">{l.sourceLeadStatus}</span> : '—'}</td>
                         <td><span className={`welcome-status ${l.welcomeEmailStatus === 'sent' || l.welcomeEmailStatus === 'delivered' ? 'sent' : l.welcomeEmailStatus === 'failed' || l.welcomeEmailStatus === 'bounced' ? 'failed' : 'pending'}`}><Mail size={12}/>{l.welcomeEmailStatus ? l.welcomeEmailStatus.charAt(0).toUpperCase() + l.welcomeEmailStatus.slice(1) : 'Not sent'}</span></td>
                         <td className="date-cell">{l.date}</td>
                         <td>
@@ -1140,7 +1200,7 @@ function App() {
                   <div className="template-card-foot">
                     <span className="template-date">Updated {new Date(t.updated_at).toLocaleDateString()}</span>
                     <div className="template-actions-group">
-                      <button className="btn-edit-tpl" onClick={() => { setEditingTemplate(t); setTemplateStudioOpen(true); }}>
+                      <button className="btn-edit-tpl" onClick={() => { setEditingTemplate(t); setTemplateStudioOpen(true); }} title="Edit template">
                         <Pencil size={13}/> Edit
                       </button>
                       <button className="btn-use-tpl" onClick={() => {
@@ -1150,8 +1210,27 @@ function App() {
                         setEmailHtml(t.html_source);
                         setMessage('');
                         setModal('campaign');
-                      }}>
+                      }} title="Use in campaign">
                         Use <ArrowRight size={13}/>
+                      </button>
+                      <button
+                        className="btn-delete-tpl"
+                        onClick={() => void handleDeleteTemplate(t)}
+                        title="Delete template"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: '6px 8px',
+                          borderRadius: '6px',
+                          border: '1px solid #fee2e2',
+                          background: '#fff5f5',
+                          color: '#dc2626',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                        }}
+                      >
+                        <Trash2 size={13}/>
                       </button>
                     </div>
                   </div>
@@ -1182,16 +1261,12 @@ function App() {
         ) : active === 'Suppression list' ? (
           <section className="page">
             <div className="page-heading">
-              <div><div className="eyebrow"><span className="eyebrow-dot"/> DELIVERY PROTECTION</div><h1>Suppression list</h1><p>Addresses here are skipped automatically whenever you send a campaign.</p></div>
-              <button className="button secondary" onClick={()=>void loadSuppressionEntries()} disabled={suppressionLoading}><RefreshCw size={14}/> Refresh</button>
+              <div><h1>Suppression list</h1><p>Manage bounced, unsubscribed, and blocked addresses for this workspace.</p></div>
             </div>
-            <form className="suppression-add-card" onSubmit={event=>void addSuppressionAddress(event)}>
-              <label><span>Email address</span><input type="email" required value={suppressionEmail} onChange={event=>setSuppressionEmail(event.target.value)} placeholder="person@example.com" /></label>
-              <label><span>Reason</span><select value={suppressionReason} onChange={event=>setSuppressionReason(event.target.value as SuppressionEntry['reason'])}><option value="manual">Manual</option><option value="unsubscribe">Unsubscribed</option><option value="bounce">Bounced</option><option value="complaint">Complaint</option></select></label>
-              <button className="button primary" type="submit" disabled={suppressionSaving}>{suppressionSaving?'Adding…':<><Plus size={15}/> Add address</>}</button>
-            </form>
-            {suppressionError&&<p className="suppression-error" role="alert">{suppressionError}</p>}
-            <div className="table-card suppression-table-card"><div className="table-header"><div><h2>Blocked addresses <span className="result-count">{suppressionEntries.length}</span></h2><p>Suppressed recipients are excluded from campaign delivery.</p></div></div><div className="table-wrap"><table><thead><tr><th>EMAIL</th><th>REASON</th><th>ADDED</th><th>ACTION</th></tr></thead><tbody>{suppressionEntries.map(entry=><tr key={entry.id}><td><b>{entry.email}</b></td><td><span className="status unsubscribed"><i/>{entry.reason}</span></td><td>{new Date(entry.created_at).toLocaleDateString()}</td><td><button className="link-button danger-link" onClick={()=>void removeSuppressionAddress(entry)}>Remove</button></td></tr>)}</tbody></table>{suppressionLoading&&!suppressionEntries.length?<div className="empty-state"><p>Loading suppression list…</p></div>:!suppressionEntries.length?<div className="empty-state"><ShieldCheck size={25}/><p>No addresses are suppressed yet.</p></div>:null}</div></div>
+            <div className="suppression-coming-soon" role="status">
+              <span className="stat-icon violet"><ShieldCheck size={20}/></span>
+              <div><span className="coming-soon-badge">Coming soon</span><h2>Suppression management is on the way</h2><p>This page will let you review and manage suppressed addresses. Campaign delivery protection continues to run automatically.</p></div>
+            </div>
           </section>
         ) : active === 'Settings' ? (
           <section className="page">
@@ -1199,7 +1274,7 @@ function App() {
             <div className="workspace-settings-grid">
               <article className="workspace-setting-card"><span className="stat-icon mint"><MailCheck size={17}/></span><div><h2>Welcome email</h2><p>{welcomeTemplate?`Automatic · ${welcomeTemplate.name}`:'No automatic welcome template selected'}</p><small>{emailSettings?.provider.configured?`ZeptoMail sender: ${emailSettings.provider.sender}`:'ZeptoMail sender is not configured on the API.'}</small>{emailSettingsError&&<small className="settings-error">{emailSettingsError}</small>}</div><button className="button secondary" onClick={()=>setActive('Templates')}>Configure</button></article>
               <article className="workspace-setting-card"><span className="stat-icon blue"><FileSpreadsheet size={17}/></span><div><h2>Google Sheets</h2><p>{sheetsStatus?.googleEmail?`Connected · ${sheetsStatus.googleEmail}`:'Not connected'}</p><small>{sheetsStatus?.configured?`${sheetsStatus.spreadsheetId} · ${sheetsStatus.range}`:'Connect an account and choose a spreadsheet to sync leads.'}</small></div><button className="button secondary" onClick={()=>setSheetSetupOpen(true)}>Manage</button></article>
-              <article className="workspace-setting-card"><span className="stat-icon violet"><ShieldCheck size={17}/></span><div><h2>Suppression list</h2><p>{suppressionEntries.length} blocked {suppressionEntries.length===1?'address':'addresses'}</p><small>Unsubscribes, complaints, bounces, and manual blocks are excluded from sends.</small></div><button className="button secondary" onClick={()=>{setActive('Suppression list');void loadSuppressionEntries();}}>Manage</button></article>
+              <article className="workspace-setting-card"><span className="stat-icon violet"><ShieldCheck size={17}/></span><div><h2>Suppression list</h2><p>Management coming soon</p><small>Campaign delivery protection continues to run automatically.</small></div><button className="button secondary" onClick={()=>setActive('Suppression list')}>Coming soon</button></article>
               <article className="workspace-setting-card"><span className="stat-icon blue"><Users size={17}/></span><div><h2>Signed in as</h2><p>{currentUser?.name||'Workspace admin'}</p><small>{currentUser?.email||'Administrator account'}</small></div><button className="button secondary" onClick={handleLogout}>Sign out</button></article>
             </div>
           </section>
@@ -1534,7 +1609,7 @@ function App() {
                   </div>
                   <div>
                     <b>Meta lead spreadsheet</b>
-                    <span>Upload a CSV export here</span>
+                  <span>Upload a Meta CSV or tab-separated export here</span>
                   </div>
                   <span className={`connected-pill ${sheetsStatus?.configured?'is-connected':'is-pending'}`}><i />{sheetsStatus?.configured?'Connected':'CSV import'}</span>
                 </div>
@@ -1552,13 +1627,13 @@ function App() {
                     <CloudUpload size={20} />
                   </div>
                   <b>Choose a CSV file to import</b>
-                  <span>Columns matched: Name, Email, Phone, Company, Campaign</span>
+                  <span>We’ll keep campaign, form, phone, and Meta lead status details.</span>
                   <span className="browse-label">Browse files</span>
                 </button>
                 <input
                   ref={fileRef}
                   type="file"
-                  accept=".csv,text/csv"
+                  accept=".csv,.tsv,text/csv,text/tab-separated-values"
                   hidden
                   onChange={onFile}
                 />
@@ -1748,6 +1823,71 @@ function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {confirmDialog && confirmDialog.open && (
+        <div className="modal-backdrop" onClick={() => setConfirmDialog(null)}>
+          <div
+            className="modal confirm-modal"
+            onClick={e => e.stopPropagation()}
+            style={{ maxWidth: '440px', padding: '24px' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '14px' }}>
+              <div style={{
+                width: '42px',
+                height: '42px',
+                borderRadius: '10px',
+                background: confirmDialog.isDestructive ? '#fef2f2' : '#f0fdf4',
+                color: confirmDialog.isDestructive ? '#dc2626' : '#16a34a',
+                display: 'grid',
+                placeItems: 'center',
+                flexShrink: 0
+              }}>
+                {confirmDialog.isDestructive ? <Trash2 size={20} /> : <CheckCircle2 size={20} />}
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: '#1e293b' }}>
+                  {confirmDialog.title}
+                </h3>
+              </div>
+            </div>
+
+            <p style={{ margin: '0 0 20px', color: '#64748b', fontSize: '0.875rem', lineHeight: 1.5 }}>
+              {confirmDialog.message}
+            </p>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => setConfirmDialog(null)}
+                style={{ padding: '8px 14px', fontSize: '0.85rem' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="button"
+                onClick={async () => {
+                  const fn = confirmDialog.onConfirm;
+                  setConfirmDialog(null);
+                  await fn();
+                }}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  backgroundColor: confirmDialog.isDestructive ? '#dc2626' : '#16a34a',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '6px'
+                }}
+              >
+                {confirmDialog.confirmLabel || 'Confirm'}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -12,7 +12,8 @@ export async function listLeads(workspaceId: string): Promise<Lead[]> {
   const contacts: any[] = [];
   const pageSize = 500;
   for (let from = 0; ; from += pageSize) {
-    const { data, error } = await supabase.from('contacts').select('id,full_name,primary_email,primary_phone,company,source,campaign,status,created_at').eq('workspace_id', workspaceId).order('created_at', { ascending: false }).range(from, from + pageSize - 1);
+    let query = supabase.from('contacts').select('id,full_name,primary_email,primary_phone,company,source,campaign,status,created_at,form_name,source_lead_status').eq('workspace_id', workspaceId).order('created_at', { ascending: false }).range(from, from + pageSize - 1);
+    const { data, error } = await query;
     if (error) throw error;
     contacts.push(...(data || []));
     if (!data || data.length < pageSize) break;
@@ -26,20 +27,68 @@ export async function listLeads(workspaceId: string): Promise<Lead[]> {
   }
   const welcomeJobs = new Map<string, any>();
   for (const job of jobs) if (job.contact_id && job.idempotency_key?.startsWith('welcome:') && !welcomeJobs.has(job.contact_id)) welcomeJobs.set(job.contact_id, job);
-  return contacts.map((r: any) => ({ id: r.id, name: r.full_name || '', email: r.primary_email, phone: r.primary_phone, company: r.company, source: r.source || 'Spreadsheet', campaign: r.campaign, status: r.status || 'new', createdAt: r.created_at, welcomeEmailStatus: welcomeJobs.get(r.id)?.status || null, welcomeEmailAt: welcomeJobs.get(r.id)?.created_at || null }));
+  return contacts.map((r: any) => ({
+    id: r.id,
+    name: r.full_name || '',
+    email: r.primary_email,
+    phone: r.primary_phone,
+    company: r.company,
+    source: r.source || 'Meta Ads',
+    campaign: r.campaign,
+    status: r.status || 'new',
+    createdAt: r.created_at,
+    formName: r.form_name,
+    sourceLeadStatus: r.source_lead_status,
+    welcomeEmailStatus: welcomeJobs.get(r.id)?.status || null,
+    welcomeEmailAt: welcomeJobs.get(r.id)?.created_at || null
+  }));
 }
 
 export async function upsertLeads(rows: Array<Record<string, unknown>>, workspaceId: string) {
   if (!supabase) throw new Error('Supabase is not configured.');
   const id = workspaceId; if (!id) throw new Error('Workspace is missing from session.');
-  const data = rows.map(r => ({ workspace_id: id, primary_email: String(r.email || '').trim().toLowerCase(), full_name: String(r.name || ''), primary_phone: r.phone ? String(r.phone) : null, company: r.company ? String(r.company) : null, source: String(r.source || 'Meta Lead Ads'), campaign: r.campaign ? String(r.campaign) : null, source_updated_at: new Date().toISOString() })).filter(r => r.primary_email.includes('@'));
+  const imported = rows.map(r => ({
+    workspace_id: id,
+    primary_email: String(r.email || '').trim().toLowerCase(),
+    full_name: String(r.name || ''),
+    primary_phone: r.phone ? String(r.phone).replace(/^p:/i, '') : null,
+    company: r.company ? String(r.company) : null,
+    source: String(r.source || 'Meta Lead Ads'),
+    campaign: (r.campaign as string) || (r.campaignName as string) || (r.formName as string) || null,
+    form_name: r.formName ? String(r.formName) : null,
+    source_lead_status: r.sourceLeadStatus ? String(r.sourceLeadStatus) : null,
+    source_updated_at: new Date().toISOString()
+  })).filter(r => r.primary_email.includes('@'));
+
+  const uniqueByEmail = new Map<string, typeof imported[number]>();
+  for (const row of imported) {
+    const previous = uniqueByEmail.get(row.primary_email);
+    if (!previous) uniqueByEmail.set(row.primary_email, row);
+    else for (const key of ['full_name','primary_phone','company','source','campaign','form_name','source_lead_status'] as const) {
+      if ((previous[key] === null || previous[key] === '') && row[key] !== null && row[key] !== '') (previous as any)[key] = row[key];
+    }
+  }
+  const data = [...uniqueByEmail.values()];
   if (!data.length) return { imported: 0 };
   const emails = data.map(r => r.primary_email);
-  const { data: existing, error: readError } = await supabase.from('contacts').select('primary_email,status,full_name,primary_phone,company,campaign').eq('workspace_id', id).in('primary_email', emails);
+  const { data: existing, error: readError } = await supabase.from('contacts').select('primary_email,status,full_name,primary_phone,company,campaign,form_name,source_lead_status').eq('workspace_id', id).in('primary_email', emails);
   if (readError) throw readError;
   const existingByEmail = new Map((existing || []).map((row: any) => [String(row.primary_email).toLowerCase(), row]));
-  const rowsToSave = data.map(row => { const old: any = existingByEmail.get(row.primary_email); return { ...row, full_name: row.full_name || old?.full_name || '', primary_phone: row.primary_phone || old?.primary_phone || null, company: row.company || old?.company || null, campaign: row.campaign || old?.campaign || null, status: old?.status || 'new' }; });
-  const { data: saved, error } = await supabase.from('contacts').upsert(rowsToSave, { onConflict: 'workspace_id,primary_email', ignoreDuplicates: false }).select('id,workspace_id,primary_email,full_name,primary_phone,company,campaign'); if (error) throw error;
+  const rowsToSave = data.map(row => {
+    const old: any = existingByEmail.get(row.primary_email);
+    return {
+      ...row,
+      full_name: row.full_name || old?.full_name || '',
+      primary_phone: row.primary_phone || old?.primary_phone || null,
+      company: row.company || old?.company || null,
+      campaign: row.campaign || old?.campaign || null,
+      form_name: row.form_name || old?.form_name || null,
+      source_lead_status: row.source_lead_status || old?.source_lead_status || null,
+      status: old?.status || 'new'
+    };
+  });
+  const { data: saved, error } = await supabase.from('contacts').upsert(rowsToSave, { onConflict: 'workspace_id,primary_email', ignoreDuplicates: false }).select('id,workspace_id,primary_email,full_name,primary_phone,company,campaign');
+  if (error) throw error;
   const newLeads = (saved || []).filter((lead: any) => !existingByEmail.has(String(lead.primary_email).toLowerCase()));
   if (newLeads.length) {
     try {

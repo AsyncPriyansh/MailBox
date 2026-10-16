@@ -100,6 +100,11 @@ export async function queueCampaign(input: { name: string; subject: string; html
       for (const job of jobs) {
         const key = `${campaign.id}:${job.email}`;
         try {
+          if (await isSuppressed(job.email, workspaceId)) {
+            await supabase.from('email_jobs').update({ status: 'suppressed', last_error: 'Skipped because the address is on the suppression list.' }).eq('idempotency_key', key);
+            await supabase.from('email_events').insert({ workspace_id: workspaceId, campaign_id: campaign.id, email: job.email, event_type: 'suppressed', event_data: { reason: 'suppression_list' } });
+            continue;
+          }
           await supabase.from('email_jobs').update({ status: 'sending', attempts: 1 }).eq('idempotency_key', key);
           const sent = await sendWithZeptoMail({
             to: job.email,

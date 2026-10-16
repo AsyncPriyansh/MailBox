@@ -1,0 +1,5 @@
+import{request}from'./http';
+export interface EmailTemplate{id:string;name:string;subject:string;preheader:string;html_source:string;mjml_source:string|null;project_json:unknown|null;version_number:number;last_used_at:string|null;created_at:string;updated_at:string}
+export interface TemplateWrite{id?:string;name:string;subject:string;preheader?:string;html:string;mjml?:string;projectJson?:unknown}
+export interface TemplateVersion{id:string;template_id:string;version_number:number;name:string;subject:string;preheader:string;mjml_source:string|null;project_json:unknown|null;html_source:string;created_at:string}
+export const templatesApi={list:()=>request<{templates:EmailTemplate[]}>('/v1/templates'),save:(input:TemplateWrite)=>request<{template:EmailTemplate}>('/v1/templates',{method:'POST',body:JSON.stringify(input)}),versions:(id:string)=>request<{versions:TemplateVersion[]}>(`/v1/templates/${id}/versions`),restore:(id:string,versionId:string)=>request<{template:EmailTemplate}>(`/v1/templates/${id}/versions/${versionId}/restore`,{method:'POST'}),remove:(id:string)=>request<{deleted:boolean}>(`/v1/templates/${id}`,{method:'DELETE'})};

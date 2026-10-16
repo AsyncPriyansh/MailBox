@@ -1,0 +1,1 @@
+{"name":"mailbpox","private":true,"version":"0.1.0","type":"module","scripts":{"dev":"vite","build":"tsc -b && vite build","preview":"vite preview"},"dependencies":{"@vitejs/plugin-react":"^6.0.3","vite":"^8.1.1","typescript":"~6.0.2","react":"^19.2.7","react-dom":"^19.2.7","lucide-react":"^1.23.0","grapesjs":"^0.20.4","grapesjs-mjml":"^1.0.8"},"devDependencies":{}}

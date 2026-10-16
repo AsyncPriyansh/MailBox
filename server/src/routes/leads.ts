@@ -1,0 +1,3 @@
+import type {FastifyInstance} from 'fastify';import {z} from 'zod';import {listLeads,upsertLeads} from '../services/leadRepository.js';
+const importSchema=z.object({rows:z.array(z.object({name:z.string().optional(),email:z.string().email(),phone:z.string().optional(),company:z.string().optional(),campaign:z.string().optional(),source:z.string().optional()})).max(5000)});
+export async function registerLeadRoutes(app:FastifyInstance){app.get('/v1/leads',async(req)=>({leads:await listLeads(req.workspaceId)}));app.post('/v1/leads/import',async(req,reply)=>{const parsed=importSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:'Invalid spreadsheet rows',details:parsed.error.flatten()});return upsertLeads(parsed.data.rows,req.workspaceId);});}

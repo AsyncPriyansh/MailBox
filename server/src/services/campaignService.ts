@@ -3,7 +3,7 @@ import { campaignQueue } from '../queues/campaignQueue.js';
 import { isSuppressed } from './suppressionService.js';
 import { sendWithZeptoMail } from '../providers/zeptomail.js';
 
-export async function queueCampaign(input: { name: string; subject: string; html: string; leadIds: string[]; scheduledAt?: string | null; templateId?: string | null }, workspaceId: string) {
+export async function queueCampaign(input: { name: string; subject: string; html: string; leadIds: string[]; audienceStatus?: 'new' | 'contacted' | 'qualified' | 'all' | 'selected'; scheduledAt?: string | null; templateId?: string | null }, workspaceId: string) {
   if (!supabase) throw new Error('Supabase is not configured.');
   if (!workspaceId) throw new Error('Workspace is missing from session.');
   if (!input.name.trim() || !input.subject.trim() || !input.html.trim() || !input.leadIds.length) {
@@ -13,7 +13,11 @@ export async function queueCampaign(input: { name: string; subject: string; html
   if (scheduledAt && (!Number.isFinite(scheduledAt.getTime()) || scheduledAt.getTime() <= Date.now())) {
     throw new Error('Schedule time must be in the future.');
   }
-  const { data: leads, error: leadError } = await supabase.from('contacts').select('id,full_name,primary_email,primary_phone,company,campaign').eq('workspace_id', workspaceId).in('id', input.leadIds);
+  const audienceStatus = input.audienceStatus || 'selected';
+  let leadQuery = supabase.from('contacts').select('id,full_name,primary_email,primary_phone,company,campaign,status').eq('workspace_id', workspaceId).in('id', input.leadIds);
+  if (audienceStatus === 'all' || audienceStatus === 'selected') leadQuery = leadQuery.neq('status', 'unsubscribed');
+  else leadQuery = leadQuery.eq('status', audienceStatus);
+  const { data: leads, error: leadError } = await leadQuery;
   if (leadError) throw leadError;
   const eligible = [];
   for (const lead of leads || []) {

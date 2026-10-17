@@ -51,6 +51,7 @@ import { authApi, type AuthUser } from './services/authApi';
 import { LogOut } from 'lucide-react';
 
 type UiLead = Lead & { date: string };
+type CampaignAudience = 'new' | 'contacted' | 'qualified' | 'all' | 'selected';
 
 const statusClass = (s: string) => s.toLowerCase();
 
@@ -92,6 +93,7 @@ function App() {
   const [filter, setFilter] = useState('All leads');
   const [timeRange, setTimeRange] = useState<'all' | 'today' | '7days' | '30days' | '90days' | 'year'>('all');
   const [selected, setSelected] = useState<string[]>([]);
+  const [campaignAudience, setCampaignAudience] = useState<CampaignAudience>('new');
   const [modal, setModal] = useState<'import' | 'campaign' | null>(null);
   const [templateStudioOpen,setTemplateStudioOpen]=useState(false);
   const [templates,setTemplates]=useState<EmailTemplate[]>([]);
@@ -383,6 +385,19 @@ function App() {
     }
   };
 
+  const campaignRecipients = leads.filter(lead => {
+    if (lead.status === 'unsubscribed') return false;
+    if (campaignAudience === 'all') return true;
+    if (campaignAudience === 'selected') return selected.includes(lead.id);
+    return lead.status === campaignAudience;
+  });
+  const activeSelectedLeadCount = leads.filter(lead => selected.includes(lead.id) && lead.status !== 'unsubscribed').length;
+
+  const openCampaign = (audience: CampaignAudience = 'new') => {
+    setCampaignAudience(audience);
+    setModal('campaign');
+  };
+
   const sendCampaign = async (e: FormEvent) => {
     e.preventDefault();
     const chosenTemplate = templates.find(t => t.id === selectedTemplateId);
@@ -393,11 +408,13 @@ function App() {
       .join('')}</div>` : '');
 
     if (!campaignName.trim() || !finalHtml.trim()) return;
+    if (!campaignRecipients.length) {
+      setNotice('No active leads match this audience category. Choose another category before sending.');
+      return;
+    }
     setBusy(true);
     try {
-      const leadIds = selected.length
-        ? selected
-        : leads.filter(l => l.status === 'new').map(l => l.id);
+      const leadIds = campaignRecipients.map(lead => lead.id);
       const result = await campaignsApi.create({
         name: campaignName.trim(),
         subject: effectiveSubject,
@@ -405,6 +422,7 @@ function App() {
         scheduledAt: scheduleAt ? new Date(scheduleAt).toISOString() : null,
         html: finalHtml,
         leadIds,
+        audienceStatus: campaignAudience,
       });
       setNotice(result.scheduledAt ? `Campaign scheduled for ${new Date(result.scheduledAt).toLocaleString()} for ${result.scheduledRecipients} leads.` : `Campaign queued for ${result.queued} leads; ${result.suppressed} suppressed.`);
       setModal(null);
@@ -461,18 +479,18 @@ function App() {
   const welcomeSummaryPanel = (
     <div className="welcome-summary-panel">
       <div className="welcome-summary-heading">
-        <span className="welcome-summary-icon"><MailCheck size={17}/></span>
+        <span className="welcome-summary-icon"><MailCheck size={18}/></span>
         <div><h2>Welcome email</h2><p>{welcomeTemplate ? `Automatic · ${welcomeTemplate.name}` : 'Not configured'}</p></div>
         <span className={`welcome-setup-badge ${welcomeTemplate && emailSettings?.provider.configured ? 'active' : 'needs-setup'}`}>{!welcomeTemplate ? 'Setup needed' : emailSettings?.provider.configured ? 'Configured' : 'Provider setup needed'}</span>
       </div>
       <div className="welcome-summary-counts">
-        <div><b>{welcomeEmailSummary.sent}</b><span>Sent</span></div>
-        <div><b>{welcomeEmailSummary.sending}</b><span>In progress</span></div>
-        <div><b>{welcomeEmailSummary.failed}</b><span>Failed</span></div>
-        <div><b>{welcomeEmailSummary.notSent}</b><span>Not sent</span></div>
+        <div className="welcome-count-box sent"><b>{welcomeEmailSummary.sent}</b><span>Sent</span></div>
+        <div className="welcome-count-box progress"><b>{welcomeEmailSummary.sending}</b><span>In progress</span></div>
+        <div className="welcome-count-box failed"><b>{welcomeEmailSummary.failed}</b><span>Failed</span></div>
+        <div className="welcome-count-box notsent"><b>{welcomeEmailSummary.notSent}</b><span>Not sent</span></div>
       </div>
       <p className="welcome-summary-help">{welcomeTemplate ? `New leads from Sheets, CSV, or the secure form hook use this template. ${emailSettings?.provider.configured ? `ZeptoMail credentials are present for ${emailSettings.provider.sender}; actual delivery is reflected per lead.` : 'Set valid ZeptoMail credentials on the server before sending.'}` : 'Choose a saved template for automatic new-lead emails.'} Counts cover all {leads.length} leads currently synced.</p>
-      <button className="link-button" onClick={() => setActive('Templates')}>{welcomeTemplate ? 'Edit welcome template' : 'Set up welcome email'} <ArrowRight size={13}/></button>
+      <button className="welcome-action-btn" onClick={() => setActive('Templates')}>{welcomeTemplate ? 'Edit welcome template' : 'Set up welcome email'} <ArrowRight size={13}/></button>
     </div>
   );
 
@@ -767,29 +785,102 @@ function App() {
                 <button className="button secondary" onClick={() => setModal('import')}>
                   <CloudUpload size={15} /> Import leads
                 </button>
-                <button className="button primary" onClick={() => setModal('campaign')}>
+                <button className="button primary" onClick={() => openCampaign()}>
                   <Plus size={16} /> New campaign
                 </button>
               </div>
             </div>
 
-            <div className="source-strip">
+            <div className={`source-strip ${sheetsStatus?.configured ? 'is-connected' : 'is-unconnected'}`}>
               <div className="source-left">
-                <div className="source-icon">
-                  <FileSpreadsheet size={16} />
+                <div className="source-icon-wrap">
+                  <div className="source-icon">
+                    <FileSpreadsheet size={18} />
+                  </div>
+                  <span className={`source-live-indicator ${sheetsStatus?.configured ? 'active' : ''}`} />
                 </div>
-                <div>
-                  <b>Meta Lead Ads spreadsheet</b>
-                  <span>{sheetsStatus?.configured ? `${sheetsStatus.googleEmail||'Google Sheets'} · ${sheetsStatus.range}` : `CSV import · ${fileName}`}</span>
+                <div className="source-meta">
+                  <div className="source-title-row">
+                    <b className="source-title">Meta Lead Ads spreadsheet</b>
+                    <span className={`connected-pill ${sheetsStatus?.configured ? 'is-connected' : 'is-pending'}`}>
+                      <i />
+                      {sheetsStatus?.configured ? 'Google Sheets live sync' : 'Not connected'}
+                    </span>
+                    {sheetsStatus?.lastError && (
+                      <span className="sheets-error-pill" title={sheetsStatus.lastError}>
+                        <ShieldAlert size={12} /> Sync error
+                      </span>
+                    )}
+                  </div>
+                  <p className="source-subtitle">
+                    {sheetsStatus?.configured ? (
+                      <>
+                        <span className="source-account-badge">{sheetsStatus.googleEmail || 'Google Sheets'}</span>
+                        <span className="source-sep">·</span>
+                        <span className="source-range-badge">{sheetsStatus.range}</span>
+                        <span className="source-sep">·</span>
+                        <span className="source-sync-time">
+                          {sheetsStatus.lastSyncedAt
+                            ? `Last synced ${new Date(sheetsStatus.lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                            : `Auto-syncs every ${sheetsStatus.intervalMinutes || 5} min`}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Connect your Google Sheet to auto-sync leads from Meta Lead Ads into Mailbox every 5 mins.</span>
+                        <span className="source-sep">·</span>
+                        <span className="source-csv-note">Or continue with CSV snapshot ({fileName})</span>
+                      </>
+                    )}
+                  </p>
                 </div>
-                <span className={`connected-pill ${sheetsStatus?.configured?'is-connected':'is-pending'}`}><i />{sheetsStatus?.configured?'Google Sheets connected':'Not connected'}</span>
               </div>
               <div className="source-right">
-                <span>{sheetsStatus?.lastSyncedAt?`Last sync ${new Date(sheetsStatus.lastSyncedAt).toLocaleString()}`:sheetsStatus?.configured?`Auto-sync every ${sheetsStatus.intervalMinutes} min`:'CSV snapshot only'}</span>
-                {sheetsStatus?.configured&&<button className="link-button" disabled={syncingSheet} onClick={syncGoogleSheet}><RefreshCw size={13} className={syncingSheet?'spin':''}/>{syncingSheet?'Syncing…':'Sync now'}</button>}
-                <button className="link-button" onClick={()=>setSheetSetupOpen(true)}>{sheetsStatus?.configured?'Manage sheet':'Connect Google Sheet'} <ArrowUpRight size={13}/></button>
-                {sheetsStatus?.lastError&&<span className="sheets-error" title={sheetsStatus.lastError}>Last sync failed</span>}
-                <button className="link-button" onClick={() => setModal('import')}>Import CSV <ArrowUpRight size={13} /></button>
+                {sheetsStatus?.configured ? (
+                  <div className="source-actions-group">
+                    <button
+                      className="button secondary button-sm sheet-action-btn"
+                      disabled={syncingSheet}
+                      onClick={syncGoogleSheet}
+                      title="Run manual synchronization now"
+                    >
+                      <RefreshCw size={13} className={syncingSheet ? 'spin' : ''} />
+                      {syncingSheet ? 'Syncing leads…' : 'Sync now'}
+                    </button>
+                    <button
+                      className="button secondary button-sm sheet-action-btn"
+                      onClick={() => setSheetSetupOpen(true)}
+                    >
+                      <Settings2 size={13} />
+                      Manage sheet
+                    </button>
+                    <button
+                      className="button ghost button-sm sheet-action-btn"
+                      onClick={() => setModal('import')}
+                    >
+                      <CloudUpload size={13} />
+                      Import CSV
+                    </button>
+                  </div>
+                ) : (
+                  <div className="source-actions-group">
+                    <button
+                      className="button primary button-sm sheet-connect-cta"
+                      onClick={() => setSheetSetupOpen(true)}
+                    >
+                      <FileSpreadsheet size={14} />
+                      Connect Google Sheet
+                      <ArrowRight size={13} />
+                    </button>
+                    <button
+                      className="button secondary button-sm sheet-action-btn"
+                      onClick={() => setModal('import')}
+                    >
+                      <CloudUpload size={13} />
+                      Import CSV snapshot
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1060,7 +1151,7 @@ function App() {
                           >
                             <MoreHorizontal size={15} />
                           </button>
-                          {openLeadActions === l.id && <div className="lead-row-menu"><button onClick={() => { void navigator.clipboard?.writeText(l.email).then(() => setNotice(`Copied ${l.email}.`)).catch(() => setNotice('Clipboard access is unavailable in this browser.')); setOpenLeadActions(null); }}>Copy email</button>{['failed','bounced'].includes(l.welcomeEmailStatus || '') && <button onClick={() => { void retryWelcome(l); }}>Retry welcome email</button>}<button onClick={() => { void updateLeadStatus(l); }}>Mark {l.status === 'contacted' ? 'new' : 'contacted'}</button><button onClick={() => { setSelected([l.id]); setModal('campaign'); setCampaignName(''); setSubject(''); setMessage(''); setEmailHtml(''); setSelectedTemplateId(''); setOpenLeadActions(null); }}>Create campaign</button></div>}
+                          {openLeadActions === l.id && <div className="lead-row-menu"><button onClick={() => { void navigator.clipboard?.writeText(l.email).then(() => setNotice(`Copied ${l.email}.`)).catch(() => setNotice('Clipboard access is unavailable in this browser.')); setOpenLeadActions(null); }}>Copy email</button>{['failed','bounced'].includes(l.welcomeEmailStatus || '') && <button onClick={() => { void retryWelcome(l); }}>Retry welcome email</button>}<button onClick={() => { void updateLeadStatus(l); }}>Mark {l.status === 'contacted' ? 'new' : 'contacted'}</button><button onClick={() => { setSelected([l.id]); openCampaign('selected'); setCampaignName(''); setSubject(''); setMessage(''); setEmailHtml(''); setSelectedTemplateId(''); setOpenLeadActions(null); }}>Create campaign</button></div>}
                         </td>
                       </tr>
                     ))}
@@ -1209,7 +1300,7 @@ function App() {
                         setSubject(t.subject);
                         setEmailHtml(t.html_source);
                         setMessage('');
-                        setModal('campaign');
+                        openCampaign();
                       }} title="Use in campaign">
                         Use <ArrowRight size={13}/>
                       </button>
@@ -1257,7 +1348,7 @@ function App() {
             </div>
           </section>
         ) : active === 'Calendar' ? (
-          <section className="page"><div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-dot"/> SEND PLANNING</div><h1>Plan your sends</h1><p>Schedule a saved template for the date and time that works for your audience.</p></div><button className="button primary" onClick={()=>{setScheduleAt('');setModal('campaign')}}><Plus size={16}/> Schedule campaign</button></div><div className="calendar-card"><div className="calendar-toolbar"><div><h2>{calendarMonth.toLocaleDateString('en-US',{month:'long',year:'numeric'})}</h2><p>{recentCampaigns.filter(c=>c.scheduled_at&&new Date(c.scheduled_at).getMonth()===calendarMonth.getMonth()&&new Date(c.scheduled_at).getFullYear()===calendarMonth.getFullYear()).length} scheduled campaigns</p></div><div className="calendar-controls"><button className="button secondary" onClick={()=>setCalendarMonth(new Date())}>Today</button><button className="icon-button" onClick={()=>setCalendarMonth(new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()-1,1))}><ChevronLeft size={16}/></button><button className="icon-button" onClick={()=>setCalendarMonth(new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+1,1))}><ChevronRight size={16}/></button></div></div><div className="calendar-grid">{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=><div className="calendar-weekday" key={day}>{day}</div>)}{Array.from({length:(new Date(calendarMonth.getFullYear(),calendarMonth.getMonth(),1).getDay()+6)%7},(_,i)=><div className="calendar-blank" key={`blank-${i}`}/>)}{Array.from({length:new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+1,0).getDate()},(_,i)=>{const day=i+1;const date=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth(),day);const items=recentCampaigns.filter(c=>c.scheduled_at&&new Date(c.scheduled_at).toDateString()===date.toDateString());return <button className={`calendar-day ${date.toDateString()===new Date().toDateString()?'today':''}`} key={day} onClick={()=>{if(date.getTime()<=Date.now()){setNotice('Choose a future date to schedule this campaign.');return;}setScheduleAt(`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(day).padStart(2,'0')}T10:00`);setModal('campaign')}}><span>{day}</span>{items.map(c=><small key={c.id}><Mail size={11}/>{c.name}</small>)}</button>})}</div></div><div className="scheduled-list"><h2>Upcoming sends</h2>{recentCampaigns.filter(c=>c.scheduled_at&&new Date(c.scheduled_at)>=new Date()).sort((a,b)=>new Date(a.scheduled_at).getTime()-new Date(b.scheduled_at).getTime()).map(c=><div className="scheduled-row" key={c.id}><div className="scheduled-date"><b>{new Date(c.scheduled_at).toLocaleDateString('en-US',{day:'2-digit'})}</b><span>{new Date(c.scheduled_at).toLocaleDateString('en-US',{month:'short'})}</span></div><div><b>{c.name}</b><small>{c.subject} · {new Date(c.scheduled_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</small></div><span className="status contacted"><i/>{c.status}</span></div>)}{!recentCampaigns.some(c=>c.scheduled_at&&new Date(c.scheduled_at)>=new Date())&&<p className="no-scheduled">Nothing scheduled yet. Select a day on the calendar to plan your first send.</p>}</div></section>
+          <section className="page"><div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-dot"/> SEND PLANNING</div><h1>Plan your sends</h1><p>Schedule a saved template for the date and time that works for your audience.</p></div><button className="button primary" onClick={()=>{setScheduleAt('');openCampaign()}}><Plus size={16}/> Schedule campaign</button></div><div className="calendar-card"><div className="calendar-toolbar"><div><h2>{calendarMonth.toLocaleDateString('en-US',{month:'long',year:'numeric'})}</h2><p>{recentCampaigns.filter(c=>c.scheduled_at&&new Date(c.scheduled_at).getMonth()===calendarMonth.getMonth()&&new Date(c.scheduled_at).getFullYear()===calendarMonth.getFullYear()).length} scheduled campaigns</p></div><div className="calendar-controls"><button className="button secondary" onClick={()=>setCalendarMonth(new Date())}>Today</button><button className="icon-button" onClick={()=>setCalendarMonth(new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()-1,1))}><ChevronLeft size={16}/></button><button className="icon-button" onClick={()=>setCalendarMonth(new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+1,1))}><ChevronRight size={16}/></button></div></div><div className="calendar-grid">{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=><div className="calendar-weekday" key={day}>{day}</div>)}{Array.from({length:(new Date(calendarMonth.getFullYear(),calendarMonth.getMonth(),1).getDay()+6)%7},(_,i)=><div className="calendar-blank" key={`blank-${i}`}/>)}{Array.from({length:new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+1,0).getDate()},(_,i)=>{const day=i+1;const date=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth(),day);const items=recentCampaigns.filter(c=>c.scheduled_at&&new Date(c.scheduled_at).toDateString()===date.toDateString());return <button className={`calendar-day ${date.toDateString()===new Date().toDateString()?'today':''}`} key={day} onClick={()=>{if(date.getTime()<=Date.now()){setNotice('Choose a future date to schedule this campaign.');return;}setScheduleAt(`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(day).padStart(2,'0')}T10:00`);openCampaign()}}><span>{day}</span>{items.map(c=><small key={c.id}><Mail size={11}/>{c.name}</small>)}</button>})}</div></div><div className="scheduled-list"><h2>Upcoming sends</h2>{recentCampaigns.filter(c=>c.scheduled_at&&new Date(c.scheduled_at)>=new Date()).sort((a,b)=>new Date(a.scheduled_at).getTime()-new Date(b.scheduled_at).getTime()).map(c=><div className="scheduled-row" key={c.id}><div className="scheduled-date"><b>{new Date(c.scheduled_at).toLocaleDateString('en-US',{day:'2-digit'})}</b><span>{new Date(c.scheduled_at).toLocaleDateString('en-US',{month:'short'})}</span></div><div><b>{c.name}</b><small>{c.subject} · {new Date(c.scheduled_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</small></div><span className="status contacted"><i/>{c.status}</span></div>)}{!recentCampaigns.some(c=>c.scheduled_at&&new Date(c.scheduled_at)>=new Date())&&<p className="no-scheduled">Nothing scheduled yet. Select a day on the calendar to plan your first send.</p>}</div></section>
         ) : active === 'Suppression list' ? (
           <section className="page">
             <div className="page-heading">
@@ -1285,7 +1376,7 @@ function App() {
                 <h1>Campaigns that convert</h1>
                 <p>Deliver email outreach to your leads via ZeptoMail with automatic suppression filtering.</p>
               </div>
-              <button className="button primary" onClick={() => setModal('campaign')}>
+              <button className="button primary" onClick={() => openCampaign()}>
                 <Plus size={16} /> New campaign
               </button>
             </div>
@@ -1330,7 +1421,7 @@ function App() {
                 {!recentCampaigns.length && (
                   <div className="empty-state">
                     <p>No campaigns have been created yet</p>
-                    <button className="button primary button-sm" onClick={() => setModal('campaign')}>
+                    <button className="button primary button-sm" onClick={() => openCampaign()}>
                       <Plus size={13} /> Create your first campaign
                     </button>
                   </div>
@@ -1346,7 +1437,7 @@ function App() {
                 <h1>{getGreeting()}, welcome back</h1>
                 <p>Your Meta leads and email outreach are synced and ready for action.</p>
               </div>
-              <button className="button primary" onClick={() => setModal('campaign')}>
+              <button className="button primary" onClick={() => openCampaign()}>
                 <Plus size={16} /> New campaign
               </button>
             </div>
@@ -1358,11 +1449,12 @@ function App() {
                     <div className="stat-top">
                       <span>Total leads</span>
                       <span className="stat-icon mint">
-                        <Users size={15} />
+                        <Users size={16} />
                       </span>
                     </div>
                     <div className="stat-value">{stats.totalLeads.toLocaleString()}</div>
                     <div className="stat-foot">
+                      <span className="stat-dot mint-dot" />
                       <span>Synchronized contacts</span>
                     </div>
                   </div>
@@ -1371,11 +1463,12 @@ function App() {
                     <div className="stat-top">
                       <span>New this week</span>
                       <span className="stat-icon blue">
-                        <Sparkles size={15} />
+                        <Sparkles size={16} />
                       </span>
                     </div>
                     <div className="stat-value">{newThisWeek.toLocaleString()}</div>
                     <div className="stat-foot">
+                      <span className="stat-dot blue-dot" />
                       <span>Added in past 7 days</span>
                     </div>
                   </div>
@@ -1384,20 +1477,27 @@ function App() {
                     <div className="stat-top">
                       <span>Ready to reach</span>
                       <span className="stat-icon gold">
-                        <Send size={15} />
+                        <Send size={16} />
                       </span>
                     </div>
                     <div className="stat-value">{stats.newLeads.toLocaleString()}</div>
                     <div className="stat-foot">
+                      <span className="stat-dot gold-dot" />
                       <span>Current lead status: new</span>
                     </div>
                   </div>
                 </div>
 
                 <div className="chart-card">
-                  <div>
-                    <h2>Lead activity</h2>
-                    <p>Submissions over the trailing 7 days</p>
+                  <div className="chart-card-head">
+                    <div>
+                      <h2>Lead activity</h2>
+                      <p>Submissions over the trailing 7 days</p>
+                    </div>
+                    <div className="chart-badge">
+                      <Users size={13} />
+                      <span>{newThisWeek} new this week</span>
+                    </div>
                   </div>
                   <div className="chart">
                     <div className="chart-grid">
@@ -1408,6 +1508,7 @@ function App() {
                     <div className="bars">
                       {activityDays.map((item, i) => (
                         <div key={i} className="bar-group" title={`${item.label}: ${item.count} leads`}>
+                          {item.count > 0 && <span className="bar-count-badge">{item.count}</span>}
                           <div style={{ height: `${item.height}%` }} />
                           <small>{item.label}</small>
                         </div>
@@ -1439,8 +1540,10 @@ function App() {
                 </div>
 
                 <div className="tip-card">
-                  <Sparkles size={16} />
-                  <b>Quick Outreach Tip</b>
+                  <div className="tip-card-top">
+                    <Sparkles size={15} />
+                    <b>Quick Outreach Tip</b>
+                  </div>
                   <p>
                     Reaching Meta leads within the first 24 hours increases conversion rates by up to 391%.
                   </p>
@@ -1558,7 +1661,7 @@ function App() {
           <span>
             <b>{selected.length}</b> leads selected
           </span>
-          <button onClick={() => setModal('campaign')}>
+          <button onClick={() => openCampaign('selected')}>
             <Send size={14} /> Email selected leads <ArrowRight size={13} />
           </button>
           <button
@@ -1698,6 +1801,16 @@ function App() {
                   />
                 </label>
                 <label>
+                  RECIPIENT CATEGORY
+                  <select value={campaignAudience} onChange={event => setCampaignAudience(event.target.value as CampaignAudience)}>
+                    <option value="new">New leads ({leads.filter(lead => lead.status === 'new').length})</option>
+                    <option value="contacted">Contacted leads ({leads.filter(lead => lead.status === 'contacted').length})</option>
+                    <option value="qualified">Qualified leads ({leads.filter(lead => lead.status === 'qualified').length})</option>
+                    {activeSelectedLeadCount > 0 && <option value="selected">Selected leads ({activeSelectedLeadCount})</option>}
+                    <option value="all">All active leads ({leads.filter(lead => lead.status !== 'unsubscribed').length})</option>
+                  </select>
+                </label>
+                <label>
                   {selectedTemplateId?'SAVED TEMPLATE PREVIEW':'EMAIL BODY'}
                   {selectedTemplateId?<div className="campaign-template-preview"><iframe title="Selected email template preview" sandbox="" srcDoc={emailHtml}/><small><CheckCircle2 size={12}/> Saved responsive design · personalized with merge tags</small></div>:<textarea required rows={7} value={message} onChange={e=>setMessage(e.target.value)} placeholder="Hi {{name}}, thanks for getting in touch..."/>}
                 </label>
@@ -1708,11 +1821,9 @@ function App() {
                   <Users size={14} />
                   <span>Sending to:</span>
                   <b>
-                    {selected.length
-                      ? `${selected.length} selected leads`
-                      : `${leads.filter(l => l.status === 'new').length} new leads`}
+                    {campaignRecipients.length} {campaignAudience === 'selected' ? 'selected' : campaignAudience === 'all' ? 'active' : campaignAudience} {campaignRecipients.length === 1 ? 'lead' : 'leads'}
                   </b>
-                  <small>· sender configured by workspace admin</small>
+                  <small>{campaignAudience === 'all' ? '· unsubscribed leads are excluded' : '· sender configured by workspace admin'}</small>
                 </div>
 
                 <div className="modal-footer">
@@ -1723,7 +1834,7 @@ function App() {
                   >
                     Cancel
                   </button>
-                  <button type="submit" disabled={busy} className="button primary">
+                  <button type="submit" disabled={busy || campaignRecipients.length === 0} className="button primary">
                     <Send size={14} />
                     {busy ? 'Saving…' : scheduleAt ? 'Schedule campaign' : 'Queue campaign'}
                   </button>
@@ -1733,7 +1844,203 @@ function App() {
           </div>
         </div>
       )}
-      {sheetSetupOpen&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setSheetSetupOpen(false);}}><section className="modal sheet-setup-modal" role="dialog" aria-modal="true" aria-labelledby="sheet-setup-title"><header className="modal-head"><span className="modal-icon"><FileSpreadsheet size={18}/></span><div><h2 id="sheet-setup-title">Connect your Google Sheet</h2><p>Authorize Google, then paste the spreadsheet Meta adds leads to.</p></div><button className="icon-btn" onClick={()=>setSheetSetupOpen(false)} aria-label="Close"><X size={18}/></button></header><div className="sheet-setup-body">{!sheetsStatus?.googleEmail?<><div className="sheet-setup-step"><span>1</span><div><b>Connect your Google account</b><small>Mailbox gets read-only access to your spreadsheets.</small></div></div><button className="button primary sheet-connect-button" onClick={connectGoogle}><Mail size={16}/> Continue with Google <ArrowRight size={15}/></button></>:<><div className="sheet-google-account"><CheckCircle2 size={17}/><div><b>{sheetsStatus.googleEmail}</b><small>Google account connected</small></div></div><form className="campaign-form" onSubmit={saveGoogleSheet}><label>Google Sheets link<input value={sheetUrl} onChange={e=>setSheetUrl(e.target.value)} placeholder="https://docs.google.com/spreadsheets/d/..." required/><small>Use the sheet Meta Lead Ads is filling in. The Google account above must have access to it.</small></label><label>Tab and range<input value={sheetRange} onChange={e=>setSheetRange(e.target.value)} placeholder="Leads!A1:Z5000" required/><small>For example: Leads!A1:Z5000. The first row must include an Email column.</small></label><button className="button primary" disabled={syncingSheet}>{syncingSheet?'Connecting and syncing…':'Save sheet and sync now'} <ArrowRight size={15}/></button></form><div className="sheet-setup-footer"><span>Auto-syncs every {sheetsStatus.intervalMinutes} minutes.</span><button className="link-button" onClick={disconnectGoogle}>Disconnect Google</button></div></>}</div></section></div>}
+      {sheetSetupOpen && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={e => {
+            if (e.target === e.currentTarget) setSheetSetupOpen(false);
+          }}
+        >
+          <section className="modal sheet-setup-modal" role="dialog" aria-modal="true" aria-labelledby="sheet-setup-title">
+            <header className="modal-head">
+              <span className="modal-icon">
+                <FileSpreadsheet size={18} />
+              </span>
+              <div>
+                <h2 id="sheet-setup-title">Connect Google Sheets</h2>
+                <p>Live sync leads directly from your Meta Lead Ads spreadsheet.</p>
+              </div>
+              <button className="icon-btn" onClick={() => setSheetSetupOpen(false)} aria-label="Close dialog">
+                <X size={18} />
+              </button>
+            </header>
+
+            <div className="sheet-setup-body">
+              {/* Stepper indicator */}
+              <div className="sheet-wizard-steps">
+                <div className={`sheet-wizard-step ${sheetsStatus?.googleEmail ? 'done' : 'active'}`}>
+                  <span className="step-num">{sheetsStatus?.googleEmail ? <Check size={14} /> : '1'}</span>
+                  <div>
+                    <b>Google Account</b>
+                    <small>{sheetsStatus?.googleEmail ? 'Connected' : 'Sign in & authorize'}</small>
+                  </div>
+                </div>
+                <div className="step-connector-line" />
+                <div className={`sheet-wizard-step ${sheetsStatus?.googleEmail ? (sheetsStatus?.configured ? 'done' : 'active') : 'pending'}`}>
+                  <span className="step-num">{sheetsStatus?.configured ? <Check size={14} /> : '2'}</span>
+                  <div>
+                    <b>Select Sheet & Range</b>
+                    <small>{sheetsStatus?.configured ? 'Active & syncing' : 'Link spreadsheet'}</small>
+                  </div>
+                </div>
+              </div>
+
+              {!sheetsStatus?.googleEmail ? (
+                <div className="sheet-step-auth-card">
+                  <div className="sheet-auth-hero">
+                    <div className="sheet-auth-icon-cluster">
+                      <div className="sheet-logo-circle meta-circle">
+                        <Users size={16} />
+                      </div>
+                      <span className="sync-connector-arrow">
+                        <ArrowRight size={14} />
+                      </span>
+                      <div className="sheet-logo-circle gsheet-circle">
+                        <FileSpreadsheet size={18} />
+                      </div>
+                      <span className="sync-connector-arrow">
+                        <ArrowRight size={14} />
+                      </span>
+                      <div className="sheet-logo-circle mailbox-circle">
+                        <MailCheck size={16} />
+                      </div>
+                    </div>
+                    <h3>Authorize read-only access to Google Sheets</h3>
+                    <p>
+                      Mailbox securely connects to your Google account to read lead rows submitted through your Meta Lead Ads campaign.
+                    </p>
+                  </div>
+
+                  <div className="sheet-trust-list">
+                    <div className="trust-item">
+                      <ShieldCheck size={15} />
+                      <span><b>Read-only access:</b> We will never modify or delete your spreadsheet files.</span>
+                    </div>
+                    <div className="trust-item">
+                      <RefreshCw size={15} />
+                      <span><b>Automatic background sync:</b> New form submissions are pulled every 5 minutes.</span>
+                    </div>
+                  </div>
+
+                  <button className="button primary sheet-connect-button" onClick={connectGoogle}>
+                    <Mail size={16} />
+                    Continue with Google
+                    <ArrowRight size={15} />
+                  </button>
+                </div>
+              ) : (
+                <div className="sheet-step-config-card">
+                  <div className="sheet-google-account">
+                    <div className="account-avatar">
+                      <CheckCircle2 size={18} />
+                    </div>
+                    <div className="account-details">
+                      <div className="account-title-row">
+                        <b>{sheetsStatus.googleEmail}</b>
+                        <span className="connected-pill is-connected">
+                          <i /> Ready
+                        </span>
+                      </div>
+                      <small>Google account authorized for read-only spreadsheet access</small>
+                    </div>
+                    <button
+                      type="button"
+                      className="link-button disconnect-btn"
+                      onClick={disconnectGoogle}
+                      title="Switch to another Google account"
+                    >
+                      Change account
+                    </button>
+                  </div>
+
+                  <form className="sheet-config-form" onSubmit={saveGoogleSheet}>
+                    <div className="form-group">
+                      <label htmlFor="sheet-url-input">
+                        <span>Google Sheets URL</span>
+                        <small>Paste the full URL from your browser address bar</small>
+                      </label>
+                      <input
+                        id="sheet-url-input"
+                        type="url"
+                        value={sheetUrl}
+                        onChange={e => setSheetUrl(e.target.value)}
+                        placeholder="https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit"
+                        required
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label htmlFor="sheet-range-input">
+                        <span>Sheet tab name and range</span>
+                        <small>Tab name and column span (must have an "Email" column header)</small>
+                      </label>
+                      <input
+                        id="sheet-range-input"
+                        value={sheetRange}
+                        onChange={e => setSheetRange(e.target.value)}
+                        placeholder="Leads!A1:Z5000"
+                        required
+                      />
+                      <div className="range-hints">
+                        <span className="hint-label">Common examples:</span>
+                        <button
+                          type="button"
+                          className="range-chip"
+                          onClick={() => setSheetRange('Sheet1!A1:Z5000')}
+                        >
+                          Sheet1!A1:Z5000
+                        </button>
+                        <button
+                          type="button"
+                          className="range-chip"
+                          onClick={() => setSheetRange('Leads!A1:Z5000')}
+                        >
+                          Leads!A1:Z5000
+                        </button>
+                        <button
+                          type="button"
+                          className="range-chip"
+                          onClick={() => setSheetRange('Form Responses 1!A1:Z5000')}
+                        >
+                          Form Responses 1!A1:Z5000
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="sheet-form-actions">
+                      <button
+                        type="button"
+                        className="button secondary"
+                        onClick={() => setSheetSetupOpen(false)}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="button primary"
+                        disabled={syncingSheet}
+                      >
+                        <RefreshCw size={14} className={syncingSheet ? 'spin' : ''} />
+                        {syncingSheet ? 'Connecting & syncing…' : 'Save and sync now'}
+                        <ArrowRight size={14} />
+                      </button>
+                    </div>
+                  </form>
+
+                  <div className="sheet-setup-footer">
+                    <span>
+                      <i className="live-dot" /> Auto-syncs every {sheetsStatus.intervalMinutes || 5} minutes automatically.
+                    </span>
+                    <button className="link-button text-destructive" onClick={disconnectGoogle}>
+                      Disconnect integration
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
 
       {/* Paste HTML Template Modal */}
       {pasteHtmlOpen && (

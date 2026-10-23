@@ -39,6 +39,8 @@ import {
   Clock,
   Copy,
   TrendingUp,
+  ExternalLink,
+  Unlink,
 } from 'lucide-react';
 import type { Lead } from './types/domain';
 import { ApiError } from './services/http';
@@ -399,7 +401,35 @@ function App() {
       setSyncingSheet(false);
     }
   };
-  const disconnectGoogle=async()=>{try{await googleSheetsApi.disconnect();setSheetsStatus(await googleSheetsApi.status());setNotice('Google Sheets disconnected.');}catch(error){setNotice(error instanceof Error?error.message:'Could not disconnect Google.');}};
+  const disconnectGoogle = async () => {
+    try {
+      await googleSheetsApi.disconnect();
+      setSheetsStatus(await googleSheetsApi.status());
+      setNotice('Google Sheets disconnected.');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not disconnect Google.');
+    }
+  };
+
+  const handleDisconnectSheetWithConfirm = () => {
+    setConfirmDialog({
+      open: true,
+      title: 'Disconnect Google Sheet?',
+      message: 'This will stop all automatic background synchronization from this Google Sheet. You can reconnect or choose another sheet at any time.',
+      confirmLabel: 'Disconnect sheet',
+      isDestructive: true,
+      onConfirm: async () => {
+        try {
+          await googleSheetsApi.disconnect();
+          const updated = await googleSheetsApi.status();
+          setSheetsStatus(updated);
+          setNotice('Google Sheet disconnected successfully. Auto-sync is stopped.');
+        } catch (error) {
+          setNotice(error instanceof Error ? error.message : 'Could not disconnect Google.');
+        }
+      }
+    });
+  };
 
   const parseCSV = async (text: string) => {
     try {
@@ -1184,6 +1214,25 @@ function App() {
                       <>
                         <span className="source-account-badge">{sheetsStatus.googleEmail || 'Google Sheets'}</span>
                         <span className="source-sep">·</span>
+                        {sheetsStatus.spreadsheetUrl ? (
+                          <a
+                            href={sheetsStatus.spreadsheetUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="source-sheet-link-badge"
+                            title="Open connected Google Sheet in new tab"
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--color-primary, #2563eb)', textDecoration: 'none', fontWeight: 600 }}
+                          >
+                            <FileSpreadsheet size={13} />
+                            {sheetsStatus.spreadsheetTitle || (sheetsStatus.spreadsheetId ? `${sheetsStatus.spreadsheetId.slice(0, 18)}…` : 'Connected Sheet')}
+                            <ExternalLink size={11} />
+                          </a>
+                        ) : (
+                          <span className="source-range-badge">
+                            {sheetsStatus.spreadsheetTitle || (sheetsStatus.spreadsheetId ? `${sheetsStatus.spreadsheetId.slice(0, 18)}…` : 'Connected Sheet')}
+                          </span>
+                        )}
+                        <span className="source-sep">·</span>
                         <span className="source-range-badge">{sheetsStatus.range}</span>
                         <span className="source-sep">·</span>
                         <span className="source-sync-time">
@@ -1220,6 +1269,16 @@ function App() {
                     >
                       <Settings2 size={13} />
                       Manage sheet
+                    </button>
+                    <button
+                      type="button"
+                      className="button secondary button-sm sheet-action-btn"
+                      style={{ color: '#ef4444', borderColor: '#fca5a5' }}
+                      onClick={handleDisconnectSheetWithConfirm}
+                      title="Disconnect Google Sheet to stop background syncing"
+                    >
+                      <Unlink size={13} />
+                      Disconnect
                     </button>
                     <button
                       className="button ghost button-sm sheet-action-btn"
@@ -1830,7 +1889,34 @@ function App() {
             <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-dot"/> WORKSPACE</div><h1>Settings</h1><p>Manage email automation, integrations, and workspace details.</p></div></div>
             <div className="workspace-settings-grid">
               <article className="workspace-setting-card"><span className="stat-icon mint"><MailCheck size={17}/></span><div><h2>Welcome email</h2><p>{welcomeTemplate?`Automatic · ${welcomeTemplate.name}`:'No automatic welcome template selected'}</p><small>{emailSettings?.provider.configured?`ZeptoMail sender: ${emailSettings.provider.sender}`:'ZeptoMail sender is not configured on the API.'}</small>{emailSettingsError&&<small className="settings-error">{emailSettingsError}</small>}</div><button className="button secondary" onClick={()=>setActive('Templates')}>Configure</button></article>
-              <article className="workspace-setting-card"><span className="stat-icon blue"><FileSpreadsheet size={17}/></span><div><h2>Google Sheets</h2><p>{sheetsStatus?.googleEmail?`Connected · ${sheetsStatus.googleEmail}`:'Not connected'}</p><small>{sheetsStatus?.configured?`${sheetsStatus.spreadsheetId} · ${sheetsStatus.range}`:'Connect an account and choose a spreadsheet to sync leads.'}</small></div><button className="button secondary" onClick={()=>setSheetSetupOpen(true)}>Manage</button></article>
+              <article className="workspace-setting-card">
+                <span className="stat-icon blue"><FileSpreadsheet size={17}/></span>
+                <div>
+                  <h2>Google Sheets</h2>
+                  <p>{sheetsStatus?.googleEmail ? `Connected · ${sheetsStatus.googleEmail}` : 'Not connected'}</p>
+                  <small>
+                    {sheetsStatus?.configured ? (
+                      <>
+                        {sheetsStatus.spreadsheetTitle ? <b>{sheetsStatus.spreadsheetTitle} · </b> : null}
+                        {sheetsStatus.spreadsheetUrl ? (
+                          <a href={sheetsStatus.spreadsheetUrl} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'underline', color: 'inherit', fontWeight: 600 }}>
+                            Open Sheet <ExternalLink size={10} style={{ display: 'inline' }} />
+                          </a>
+                        ) : sheetsStatus.spreadsheetId}
+                        {` · ${sheetsStatus.range}`}
+                      </>
+                    ) : 'Connect an account and choose a spreadsheet to sync leads.'}
+                  </small>
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button className="button secondary" onClick={() => setSheetSetupOpen(true)}>Manage</button>
+                  {sheetsStatus?.configured && (
+                    <button className="button secondary text-destructive" style={{ borderColor: '#fca5a5' }} onClick={handleDisconnectSheetWithConfirm}>
+                      Disconnect
+                    </button>
+                  )}
+                </div>
+              </article>
               <article className="workspace-setting-card"><span className="stat-icon violet"><ShieldCheck size={17}/></span><div><h2>Suppression list</h2><p>Management coming soon</p><small>Campaign delivery protection continues to run automatically.</small></div><button className="button secondary" onClick={()=>setActive('Suppression list')}>Coming soon</button></article>
               <article className="workspace-setting-card"><span className="stat-icon blue"><Users size={17}/></span><div><h2>Signed in as</h2><p>{currentUser?.name||'Workspace admin'}</p><small>{currentUser?.email||'Administrator account'}</small></div><button className="button secondary" onClick={handleLogout}>Sign out</button></article>
             </div>

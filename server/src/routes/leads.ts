@@ -27,12 +27,31 @@ export async function registerLeadRoutes(app: FastifyInstance) {
   app.delete('/v1/leads/all', async (req, reply) => {
     if (!supabase) return reply.code(503).send({ error: 'Supabase is not configured.' });
     try {
-      // 1. Remove email jobs linked to this workspace
+      // 1. Record tombstone for all deleted contacts to avoid background re-import
+      const { data: contactsToDelete } = await supabase
+        .from('contacts')
+        .select('primary_email')
+        .eq('workspace_id', req.workspaceId);
+
+      if (contactsToDelete && contactsToDelete.length > 0) {
+        const events = contactsToDelete.map(c => ({
+          workspace_id: req.workspaceId,
+          campaign_id: null,
+          email: c.primary_email,
+          event_type: 'lead_deleted',
+          event_data: { deleted_at: new Date().toISOString() }
+        }));
+        for (let i = 0; i < events.length; i += 500) {
+          await supabase.from('email_events').insert(events.slice(i, i + 500));
+        }
+      }
+
+      // 2. Remove email jobs linked to this workspace
       await supabase.from('email_jobs').delete().eq('workspace_id', req.workspaceId);
-      // 2. Remove all contacts for this workspace
+      // 3. Remove all contacts for this workspace
       const { data, error, count } = await supabase.from('contacts').delete({ count: 'exact' }).eq('workspace_id', req.workspaceId).select('id');
       if (error) throw error;
-      // 3. Reset integration sync state so re-linking a sheet imports fresh rows
+      // 4. Reset integration sync state so re-linking a sheet imports fresh rows
       try {
         await supabase.from('integration_sync_state').update({
           last_synced_at: null,
@@ -55,7 +74,29 @@ export async function registerLeadRoutes(app: FastifyInstance) {
     const parsed = bulkDeleteSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid lead IDs for deletion.' });
     try {
+      // 1. Record tombstone for deleted contacts to avoid background re-import
+      const { data: contactsToDelete } = await supabase
+        .from('contacts')
+        .select('primary_email')
+        .eq('workspace_id', req.workspaceId)
+        .in('id', parsed.data.ids);
+
+      if (contactsToDelete && contactsToDelete.length > 0) {
+        const events = contactsToDelete.map(c => ({
+          workspace_id: req.workspaceId,
+          campaign_id: null,
+          email: c.primary_email,
+          event_type: 'lead_deleted',
+          event_data: { deleted_at: new Date().toISOString() }
+        }));
+        for (let i = 0; i < events.length; i += 500) {
+          await supabase.from('email_events').insert(events.slice(i, i + 500));
+        }
+      }
+
+      // 2. Remove associated email jobs
       await supabase.from('email_jobs').delete().eq('workspace_id', req.workspaceId).in('contact_id', parsed.data.ids);
+      // 3. Delete contacts
       const { data, error, count } = await supabase.from('contacts').delete({ count: 'exact' }).eq('workspace_id', req.workspaceId).in('id', parsed.data.ids).select('id');
       if (error) throw error;
       return { deleted: count ?? (data?.length || 0) };

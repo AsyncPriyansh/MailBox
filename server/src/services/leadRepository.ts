@@ -71,10 +71,31 @@ export async function upsertLeads(rows: Array<Record<string, unknown>>, workspac
   const data = [...uniqueByEmail.values()];
   if (!data.length) return { imported: 0 };
   const emails = data.map(r => r.primary_email);
-  const { data: existing, error: readError } = await supabase.from('contacts').select('primary_email,status,full_name,primary_phone,company,campaign,form_name,source_lead_status').eq('workspace_id', id).in('primary_email', emails);
+
+  // Guard 1: Filter out leads previously deleted by the user
+  const deletedSet = new Set<string>();
+  const chunkLimit = 500;
+  for (let offset = 0; offset < emails.length; offset += chunkLimit) {
+    const chunk = emails.slice(offset, offset + chunkLimit);
+    const { data: deletedEvents } = await supabase
+      .from('email_events')
+      .select('email')
+      .eq('workspace_id', id)
+      .eq('event_type', 'lead_deleted')
+      .in('email', chunk);
+    if (deletedEvents) {
+      for (const d of deletedEvents) deletedSet.add(String(d.email).toLowerCase());
+    }
+  }
+
+  const rowsToProcess = data.filter(r => !deletedSet.has(r.primary_email.toLowerCase()));
+  if (!rowsToProcess.length) return { imported: 0 };
+
+  const emailsToSave = rowsToProcess.map(r => r.primary_email);
+  const { data: existing, error: readError } = await supabase.from('contacts').select('primary_email,status,full_name,primary_phone,company,campaign,form_name,source_lead_status').eq('workspace_id', id).in('primary_email', emailsToSave);
   if (readError) throw readError;
   const existingByEmail = new Map((existing || []).map((row: any) => [String(row.primary_email).toLowerCase(), row]));
-  const rowsToSave = data.map(row => {
+  const rowsToSave = rowsToProcess.map(row => {
     const old: any = existingByEmail.get(row.primary_email);
     return {
       ...row,
@@ -102,6 +123,21 @@ export async function upsertLeads(rows: Array<Record<string, unknown>>, workspac
       if (template) {
         for (const lead of newLeads) {
           if (await isSuppressed(lead.primary_email, id)) continue;
+
+          // Guard 2: Never send welcome email twice to the same email in this workspace
+          const { data: alreadySentWelcome } = await supabase
+            .from('email_events')
+            .select('id')
+            .eq('workspace_id', id)
+            .eq('email', lead.primary_email)
+            .is('campaign_id', null)
+            .eq('event_type', 'sent')
+            .limit(1);
+
+          if (alreadySentWelcome && alreadySentWelcome.length > 0) {
+            continue;
+          }
+
           const leadData = {
             name: lead.full_name || lead.primary_email.split('@')[0],
             email: lead.primary_email,

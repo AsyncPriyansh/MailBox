@@ -4,7 +4,19 @@ import { supabase } from '../supabase.js';
 import { upsertLeads } from './leadRepository.js';
 import { decryptToken, googleOAuthClient } from './googleOAuth.js';
 
-export interface SheetsSyncStatus { configured:boolean; spreadsheetId:string|null; range:string|null; googleEmail:string|null; intervalMinutes:number; lastSyncedAt:string|null; lastImported:number; lastError:string|null; syncing:boolean }
+export interface SheetsSyncStatus {
+  configured: boolean;
+  spreadsheetId: string | null;
+  spreadsheetTitle: string | null;
+  spreadsheetUrl: string | null;
+  range: string | null;
+  googleEmail: string | null;
+  intervalMinutes: number;
+  lastSyncedAt: string | null;
+  lastImported: number;
+  lastError: string | null;
+  syncing: boolean;
+}
 const intervalMinutes=()=>{const n=Number(process.env.GOOGLE_SHEETS_SYNC_INTERVAL_MINUTES||5);return Number.isFinite(n)?Math.min(1440,Math.max(1,n)):5;};
 const activeSyncs=new Set<string>();
 
@@ -44,7 +56,22 @@ export async function getSheetsSyncStatus(workspaceId:string):Promise<SheetsSync
   const { data, error: stateError } = await supabase.from('integration_sync_state').select('last_synced_at,last_imported,last_error').eq('workspace_id',workspaceId).eq('integration','google_sheets').maybeSingle();
   if(!stateError) state = data;
  } catch {}
- return{configured:Boolean(connectionRow?.spreadsheet_id),spreadsheetId:connectionRow?.spreadsheet_id||null,range:connectionRow?.sheet_range||null,googleEmail:connectionRow?.google_email||null,intervalMinutes:intervalMinutes(),lastSyncedAt:state?.last_synced_at||null,lastImported:state?.last_imported||0,lastError:state?.last_error||null,syncing:activeSyncs.has(workspaceId)};
+ const spreadsheetId = connectionRow?.spreadsheet_id || null;
+ const spreadsheetTitle = connectionRow?.spreadsheet_title || null;
+ const spreadsheetUrl = spreadsheetId ? `https://docs.google.com/spreadsheets/d/${spreadsheetId}` : null;
+ return {
+   configured: Boolean(spreadsheetId),
+   spreadsheetId,
+   spreadsheetTitle,
+   spreadsheetUrl,
+   range: connectionRow?.sheet_range || null,
+   googleEmail: connectionRow?.google_email || null,
+   intervalMinutes: intervalMinutes(),
+   lastSyncedAt: state?.last_synced_at || null,
+   lastImported: state?.last_imported || 0,
+   lastError: state?.last_error || null,
+   syncing: activeSyncs.has(workspaceId)
+ };
 }
 
 export async function syncWorkspaceSheet(workspaceId:string){

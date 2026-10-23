@@ -27,11 +27,11 @@
       "project_json": {
         "isRawHtml": false,
         "blocks": [
-          {  
+          {
             "id": "block-brand",
             "type": "heading",
-            "content": {                                                       
-              "text": "{{company}}",                                                  
+            "content": {
+              "text": "{{company}}",
               "level": "h3",
               "align": "center",
               "color": "#176b4b"

@@ -1,5 +1,17 @@
 import{request}from'./http';
-export interface SheetsSyncStatus{configured:boolean;spreadsheetId:string|null;range:string|null;googleEmail:string|null;intervalMinutes:number;lastSyncedAt:string|null;lastImported:number;lastError:string|null;syncing:boolean}
+export interface SheetsSyncStatus {
+  configured: boolean;
+  spreadsheetId: string | null;
+  spreadsheetTitle?: string | null;
+  spreadsheetUrl?: string | null;
+  range: string | null;
+  googleEmail: string | null;
+  intervalMinutes: number;
+  lastSyncedAt: string | null;
+  lastImported: number;
+  lastError: string | null;
+  syncing: boolean;
+}
 export const googleSheetsApi={
  status:()=>request<SheetsSyncStatus>('/v1/integrations/google/status'),
  connectUrl:()=>request<{authUrl:string}>('/v1/integrations/google/connect-url',{method:'POST'}),

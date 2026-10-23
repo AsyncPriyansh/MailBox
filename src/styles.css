@@ -4149,9 +4149,129 @@ body {
 }
 
 .campaign-stats-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 12px;
   margin-bottom: 16px;
+}
+
+/* Outbound View Switcher: Broadcasts vs Automated Welcome */
+.campaign-view-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #f1f5f2;
+  padding: 4px;
+  border-radius: 10px;
+  margin-bottom: 16px;
+  border: 1px solid #e1e7e2;
+}
+
+.view-switcher-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: #4b5563;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+}
+
+.view-switcher-tab:hover {
+  color: #111827;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.view-switcher-tab.active {
+  background: #ffffff;
+  color: #0f172a;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.switcher-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 9999px;
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.switcher-badge.highlight {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.stat-card-active {
+  border-color: #16a34a !important;
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.15) !important;
+}
+
+.welcome-recipient-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.welcome-avatar-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #f0fdf4;
+  color: #16a34a;
+  border: 1px solid #bbf7d0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.welcome-recipient-email {
+  font-weight: 600;
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.welcome-subject-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.welcome-type-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #15803d;
+  background: #f0fdf4;
+  padding: 2px 6px;
+  border-radius: 4px;
+  width: fit-content;
+}
+
+.welcome-live-banner-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #166534;
+  background: #f0fdf4;
+  border: 1px solid #dcfce7;
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-weight: 500;
 }
 
 .campaign-list-card {

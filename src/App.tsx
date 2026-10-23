@@ -45,7 +45,7 @@ import {
 import type { Lead } from './types/domain';
 import { ApiError } from './services/http';
 import { leadsApi } from './services/leadsApi';
-import { campaignsApi, dashboardApi } from './services/campaignsApi';
+import { campaignsApi, dashboardApi, welcomeEmailsApi, type WelcomeEmailRecord } from './services/campaignsApi';
 import { parseLeadCsv, downloadLeadCsv } from './features/leads/csv';
 import { templatesApi, emailSettingsApi, type EmailTemplate, type EmailSettings } from './services/templatesApi';
 import { googleSheetsApi, type SheetsSyncStatus } from './services/googleSheetsApi';
@@ -152,6 +152,10 @@ function App() {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [welcomeRecords, setWelcomeRecords] = useState<WelcomeEmailRecord[]>([]);
+  const [welcomeTotalSent, setWelcomeTotalSent] = useState<number>(0);
+  const [outboundTab, setOutboundTab] = useState<'campaigns' | 'welcome'>('campaigns');
+  const [welcomeSearchQuery, setWelcomeSearchQuery] = useState('');
 
   const fileRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -167,14 +171,24 @@ function App() {
     setIsRetrying(true);
     try {
       const settingsRequest = emailSettingsApi.get().then(value => ({ value, error: '' })).catch(error => ({ value: null, error: error instanceof Error ? error.message : 'Email settings request failed.' }));
-      const [result, dashboard, templateResult, campaignResult, sheetStatus, settingsResult] = await Promise.all([leadsApi.list(), dashboardApi.stats(), templatesApi.list(), campaignsApi.list(), googleSheetsApi.status(), settingsRequest]);
+      const [result, dashboard, templateResult, campaignResult, sheetStatus, settingsResult, welcomeResult] = await Promise.all([
+        leadsApi.list(),
+        dashboardApi.stats(),
+        templatesApi.list(),
+        campaignsApi.list(),
+        googleSheetsApi.status(),
+        settingsRequest,
+        welcomeEmailsApi.list().catch(() => ({ total: 0, records: [] as WelcomeEmailRecord[] }))
+      ]);
       setLeads(result.leads.map(toUiLead));
       setStats(dashboard.stats);
-      setRecentCampaigns(campaignResult.campaigns.length?campaignResult.campaigns:dashboard.recentCampaigns);
+      setRecentCampaigns(campaignResult.campaigns.length ? campaignResult.campaigns : dashboard.recentCampaigns);
       setTemplates(templateResult.templates);
       setEmailSettings(settingsResult.value);
       setEmailSettingsError(settingsResult.error);
       setSheetsStatus(sheetStatus);
+      setWelcomeRecords(welcomeResult.records || []);
+      setWelcomeTotalSent(welcomeResult.total || 0);
       setServiceError('');
       setDataReady(true);
     } catch (error) {
@@ -733,6 +747,17 @@ function App() {
     });
   }, [recentCampaigns, campaignStatusFilter, campaignSearchQuery]);
 
+  const filteredWelcomeRecords = useMemo(() => {
+    if (!welcomeSearchQuery.trim()) return welcomeRecords;
+    const q = welcomeSearchQuery.toLowerCase();
+    return welcomeRecords.filter(r =>
+      (r.email || '').toLowerCase().includes(q) ||
+      (r.subject || '').toLowerCase().includes(q) ||
+      (r.provider || '').toLowerCase().includes(q) ||
+      (r.messageId || '').toLowerCase().includes(q)
+    );
+  }, [welcomeRecords, welcomeSearchQuery]);
+
   const handleCopySubject = (subjectText: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
     if (!subjectText) return;
@@ -759,11 +784,16 @@ function App() {
   const handleRefreshCampaigns = async () => {
     setRefreshingCampaigns(true);
     try {
-      const res = await campaignsApi.list();
+      const [res, welcomeRes] = await Promise.all([
+        campaignsApi.list(),
+        welcomeEmailsApi.list().catch(() => ({ total: 0, records: [] as WelcomeEmailRecord[] }))
+      ]);
       if (res.campaigns) {
         setRecentCampaigns(res.campaigns);
-        setNotice('Campaign history updated.');
       }
+      setWelcomeRecords(welcomeRes.records || []);
+      setWelcomeTotalSent(welcomeRes.total || 0);
+      setNotice('Campaigns and welcome email history updated.');
     } catch {
       setNotice('Could not refresh campaigns.');
     } finally {
@@ -818,13 +848,46 @@ function App() {
         <span className={`welcome-setup-badge ${welcomeTemplate && emailSettings?.provider.configured ? 'active' : 'needs-setup'}`}>{!welcomeTemplate ? 'Setup needed' : emailSettings?.provider.configured ? 'Configured' : 'Provider setup needed'}</span>
       </div>
       <div className="welcome-summary-counts">
-        <div className="welcome-count-box sent"><b>{welcomeEmailSummary.sent}</b><span>Sent</span></div>
-        <div className="welcome-count-box progress"><b>{welcomeEmailSummary.sending}</b><span>In progress</span></div>
-        <div className="welcome-count-box failed"><b>{welcomeEmailSummary.failed}</b><span>Failed</span></div>
-        <div className="welcome-count-box notsent"><b>{welcomeEmailSummary.notSent}</b><span>Not sent</span></div>
+        <div className="welcome-count-box sent" title="Permanent log of all welcome emails dispatched in this workspace">
+          <b>{welcomeTotalSent > 0 ? welcomeTotalSent : welcomeEmailSummary.sent}</b>
+          <span>Total Sent</span>
+        </div>
+        <div className="welcome-count-box progress">
+          <b>{welcomeEmailSummary.sent}</b>
+          <span>In active leads</span>
+        </div>
+        <div className="welcome-count-box failed">
+          <b>{welcomeEmailSummary.failed}</b>
+          <span>Failed</span>
+        </div>
+        <div className="welcome-count-box notsent">
+          <b>{welcomeEmailSummary.notSent}</b>
+          <span>Pending</span>
+        </div>
       </div>
-      <p className="welcome-summary-help">{welcomeTemplate ? `New leads from Sheets, CSV, or the secure form hook use this template. ${emailSettings?.provider.configured ? `ZeptoMail credentials are present for ${emailSettings.provider.sender}; actual delivery is reflected per lead.` : 'Set valid ZeptoMail credentials on the server before sending.'}` : 'Choose a saved template for automatic new-lead emails.'} Counts cover all {leads.length} leads currently synced.</p>
-      <button className="welcome-action-btn" onClick={() => setActive('Templates')}>{welcomeTemplate ? 'Edit welcome template' : 'Set up welcome email'} <ArrowRight size={13}/></button>
+      <p className="welcome-summary-help">
+        {welcomeTemplate ? `New leads from Sheets, CSV, or form hooks receive this template automatically. Delivery is protected: each recipient is welcomed only once.` : 'Choose a saved template for automatic new-lead emails.'}
+        {welcomeTotalSent > 0 ? ` All ${welcomeTotalSent} sent records are permanently preserved in your workspace history.` : ''}
+      </p>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '12px', flexWrap: 'wrap', gap: '8px' }}>
+        <button className="welcome-action-btn" onClick={() => setActive('Templates')}>
+          {welcomeTemplate ? 'Edit welcome template' : 'Set up welcome email'} <ArrowRight size={13}/>
+        </button>
+        {welcomeTotalSent > 0 && (
+          <button
+            type="button"
+            className="button secondary button-sm"
+            onClick={() => {
+              setActive('Campaigns');
+              setOutboundTab('welcome');
+            }}
+            title="Inspect full list of all welcome emails dispatched"
+            style={{ fontWeight: 600, fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+          >
+            <History size={13} /> View all {welcomeTotalSent} welcome records →
+          </button>
+        )}
+      </div>
     </div>
   );
 
@@ -1954,10 +2017,16 @@ function App() {
             </div>
 
             {/* Campaign Performance KPI Grid */}
+            {/* Campaign Performance KPI Grid */}
             <div className="stats-grid campaign-stats-grid">
-              <div className="stat-card">
+              <div
+                className={`stat-card ${outboundTab === 'campaigns' ? 'stat-card-active' : ''}`}
+                style={{ cursor: 'pointer' }}
+                onClick={() => setOutboundTab('campaigns')}
+                title="Click to view broadcast campaigns"
+              >
                 <div className="stat-top">
-                  <span>Total Campaigns</span>
+                  <span>Broadcast Campaigns</span>
                   <span className="stat-icon">
                     <Send size={14} />
                   </span>
@@ -1970,27 +2039,32 @@ function App() {
 
               <div className="stat-card">
                 <div className="stat-top">
-                  <span>Emails Sent</span>
+                  <span>Total Emails Sent</span>
                   <span className="stat-icon">
                     <Mail size={14} />
                   </span>
                 </div>
-                <div className="stat-value">{campaignStats.totalSent.toLocaleString()}</div>
+                <div className="stat-value">{(campaignStats.totalSent + welcomeTotalSent).toLocaleString()}</div>
                 <div className="stat-foot">
-                  <span>{campaignStats.totalRecipients.toLocaleString()} total recipients</span>
+                  <span>{campaignStats.totalSent.toLocaleString()} broadcast · {welcomeTotalSent.toLocaleString()} automated</span>
                 </div>
               </div>
 
-              <div className="stat-card">
+              <div
+                className={`stat-card ${outboundTab === 'welcome' ? 'stat-card-active' : ''}`}
+                style={{ cursor: 'pointer' }}
+                onClick={() => setOutboundTab('welcome')}
+                title="Click to view all automated welcome email records"
+              >
                 <div className="stat-top">
-                  <span>Delivery Rate</span>
-                  <span className="stat-icon">
-                    <CheckCircle2 size={14} />
+                  <span>Welcome Emails</span>
+                  <span className="stat-icon" style={{ color: '#16a34a' }}>
+                    <Sparkles size={14} />
                   </span>
                 </div>
-                <div className="stat-value">{campaignStats.deliveryRate}%</div>
+                <div className="stat-value">{welcomeTotalSent.toLocaleString()}</div>
                 <div className="stat-foot">
-                  <span>{campaignStats.failedCount > 0 ? `${campaignStats.failedCount} failed sends` : '100% deliverability'}</span>
+                  <span style={{ color: '#16a34a', fontWeight: 600 }}>Permanent log · Click to view →</span>
                 </div>
               </div>
 
@@ -2006,209 +2080,372 @@ function App() {
                   <span>{campaignStats.scheduledCount === 1 ? '1 upcoming campaign' : `${campaignStats.scheduledCount} upcoming campaigns`}</span>
                 </div>
               </div>
-            </div>
 
-            {/* Main Table Card */}
-            <div className="table-card campaign-list-card">
-              <div className="campaign-toolbar">
-                <div className="campaign-toolbar-left">
-                  <div className="searchbox campaign-search">
-                    <Search size={14} />
-                    <input
-                      type="text"
-                      placeholder="Search campaigns..."
-                      value={campaignSearchQuery}
-                      onChange={e => setCampaignSearchQuery(e.target.value)}
-                    />
-                    {campaignSearchQuery && (
-                      <button
-                        className="clear-search-btn"
-                        onClick={() => setCampaignSearchQuery('')}
-                        aria-label="Clear search"
-                      >
-                        <X size={12} />
-                      </button>
-                    )}
-                  </div>
-
-                  <div className="campaign-filter-tabs">
-                    <button
-                      className={`campaign-tab ${campaignStatusFilter === 'all' ? 'active' : ''}`}
-                      onClick={() => setCampaignStatusFilter('all')}
-                    >
-                      All <span className="tab-badge">{recentCampaigns.length}</span>
-                    </button>
-                    <button
-                      className={`campaign-tab ${campaignStatusFilter === 'completed' ? 'active' : ''}`}
-                      onClick={() => setCampaignStatusFilter('completed')}
-                    >
-                      Delivered <span className="tab-badge">{campaignStats.completedCount}</span>
-                    </button>
-                    <button
-                      className={`campaign-tab ${campaignStatusFilter === 'scheduled' ? 'active' : ''}`}
-                      onClick={() => setCampaignStatusFilter('scheduled')}
-                    >
-                      Scheduled <span className="tab-badge">{campaignStats.scheduledCount}</span>
-                    </button>
-                    {(campaignStats.sendingCount > 0 || campaignStatusFilter === 'sending') && (
-                      <button
-                        className={`campaign-tab ${campaignStatusFilter === 'sending' ? 'active' : ''}`}
-                        onClick={() => setCampaignStatusFilter('sending')}
-                      >
-                        Sending <span className="tab-badge">{campaignStats.sendingCount}</span>
-                      </button>
-                    )}
-                    {(campaignStats.failedCount > 0 || campaignStatusFilter === 'failed') && (
-                      <button
-                        className={`campaign-tab ${campaignStatusFilter === 'failed' ? 'active' : ''}`}
-                        onClick={() => setCampaignStatusFilter('failed')}
-                      >
-                        Failed <span className="tab-badge">{campaignStats.failedCount}</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                <div className="campaign-toolbar-right">
-                  {(campaignSearchQuery || campaignStatusFilter !== 'all') && (
-                    <button
-                      className="reset-filters-link"
-                      onClick={() => {
-                        setCampaignSearchQuery('');
-                        setCampaignStatusFilter('all');
-                      }}
-                    >
-                      Reset filters
-                    </button>
-                  )}
-                  <span className="campaign-count-indicator">
-                    Showing <b>{filteredCampaigns.length}</b> of {recentCampaigns.length}
+              <div className="stat-card">
+                <div className="stat-top">
+                  <span>Delivery Rate</span>
+                  <span className="stat-icon">
+                    <CheckCircle2 size={14} />
                   </span>
                 </div>
-              </div>
-
-              <div className="table-wrap">
-                <table className="campaign-modern-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: '44%' }}>CAMPAIGN</th>
-                      <th style={{ width: '16%' }}>AUDIENCE</th>
-                      <th style={{ width: '16%' }}>STATUS</th>
-                      <th style={{ width: '16%' }}>DATE</th>
-                      <th style={{ width: '8%', textAlign: 'right' }}>ACTION</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredCampaigns.map(c => {
-                      const dateDisplay = c.scheduled_at ? c.scheduled_at : c.created_at;
-                      const matchedTemplate = c.template_id ? templates.find(t => t.id === c.template_id) : null;
-
-                      return (
-                        <tr
-                          key={c.id}
-                          className="campaign-row"
-                          onClick={() => handleInspectCampaign(c)}
-                        >
-                          {/* Campaign Name & Subject preview */}
-                          <td>
-                            <div className="campaign-primary-cell">
-                              <div className="campaign-title-row">
-                                <span className="campaign-name">{c.name}</span>
-                                {matchedTemplate && (
-                                  <span className="campaign-template-pill" title={`Template: ${matchedTemplate.name}`}>
-                                    {matchedTemplate.name}
-                                  </span>
-                                )}
-                              </div>
-                              <div className="campaign-subject-preview" title={c.subject}>
-                                {c.subject || 'No subject'}
-                              </div>
-                            </div>
-                          </td>
-
-                          {/* Audience */}
-                          <td>
-                            <span className="campaign-audience-text">
-                              {c.recipient_count} {c.recipient_count === 1 ? 'lead' : 'leads'}
-                            </span>
-                          </td>
-
-                          {/* Status */}
-                          <td>
-                            <span className={`apple-status-badge ${c.status}`}>
-                              <span className="status-dot" />
-                              {c.status === 'completed'
-                                ? 'Delivered'
-                                : c.status === 'scheduled'
-                                ? 'Scheduled'
-                                : c.status === 'sending'
-                                ? 'Sending'
-                                : c.status === 'failed'
-                                ? 'Failed'
-                                : c.status}
-                            </span>
-                          </td>
-
-                          {/* Date */}
-                          <td>
-                            <span className="campaign-date-text">
-                              {formatCampaignDate(dateDisplay)}
-                            </span>
-                          </td>
-
-                          {/* Quick Action */}
-                          <td style={{ textAlign: 'right' }}>
-                            <div className="campaign-row-actions" onClick={e => e.stopPropagation()}>
-                              <button
-                                className="campaign-view-button"
-                                title="View campaign details"
-                                onClick={() => handleInspectCampaign(c)}
-                              >
-                                View
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-
-                {/* Empty State when no campaigns exist */}
-                {!recentCampaigns.length && (
-                  <div className="campaign-empty-banner">
-                    <div className="empty-icon-circle">
-                      <Send size={24} />
-                    </div>
-                    <h3>No campaigns created yet</h3>
-                    <p>Create your first campaign to send targeted email outreach to your Meta leads via ZeptoMail.</p>
-                    <button className="button primary button-sm" onClick={() => openCampaign()}>
-                      <Plus size={14} /> Create your first campaign
-                    </button>
-                  </div>
-                )}
-
-                {/* Empty State when filters yield no results */}
-                {recentCampaigns.length > 0 && !filteredCampaigns.length && (
-                  <div className="campaign-empty-banner">
-                    <div className="empty-icon-circle">
-                      <Search size={22} />
-                    </div>
-                    <h3>No matching campaigns found</h3>
-                    <p>Try adjusting your search terms or status filter to see other campaigns.</p>
-                    <button
-                      className="button secondary button-sm"
-                      onClick={() => {
-                        setCampaignSearchQuery('');
-                        setCampaignStatusFilter('all');
-                      }}
-                    >
-                      Clear all filters
-                    </button>
-                  </div>
-                )}
+                <div className="stat-value">{campaignStats.deliveryRate}%</div>
+                <div className="stat-foot">
+                  <span>{campaignStats.failedCount > 0 ? `${campaignStats.failedCount} failed sends` : '100% deliverability'}</span>
+                </div>
               </div>
             </div>
+
+            {/* Outbound View Switcher */}
+            <div className="campaign-view-switcher">
+              <button
+                type="button"
+                className={`view-switcher-tab ${outboundTab === 'campaigns' ? 'active' : ''}`}
+                onClick={() => setOutboundTab('campaigns')}
+              >
+                <Send size={14} />
+                <span>Broadcast Campaigns</span>
+                <span className="switcher-badge">{recentCampaigns.length}</span>
+              </button>
+              <button
+                type="button"
+                className={`view-switcher-tab ${outboundTab === 'welcome' ? 'active' : ''}`}
+                onClick={() => setOutboundTab('welcome')}
+              >
+                <Sparkles size={14} />
+                <span>Automated Welcome Emails</span>
+                <span className="switcher-badge highlight">{welcomeTotalSent}</span>
+              </button>
+            </div>
+
+            {outboundTab === 'campaigns' ? (
+              /* Main Broadcast Campaigns Table Card */
+              <div className="table-card campaign-list-card">
+                <div className="campaign-toolbar">
+                  <div className="campaign-toolbar-left">
+                    <div className="searchbox campaign-search">
+                      <Search size={14} />
+                      <input
+                        type="text"
+                        placeholder="Search campaigns..."
+                        value={campaignSearchQuery}
+                        onChange={e => setCampaignSearchQuery(e.target.value)}
+                      />
+                      {campaignSearchQuery && (
+                        <button
+                          className="clear-search-btn"
+                          onClick={() => setCampaignSearchQuery('')}
+                          aria-label="Clear search"
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="campaign-filter-tabs">
+                      <button
+                        className={`campaign-tab ${campaignStatusFilter === 'all' ? 'active' : ''}`}
+                        onClick={() => setCampaignStatusFilter('all')}
+                      >
+                        All <span className="tab-badge">{recentCampaigns.length}</span>
+                      </button>
+                      <button
+                        className={`campaign-tab ${campaignStatusFilter === 'completed' ? 'active' : ''}`}
+                        onClick={() => setCampaignStatusFilter('completed')}
+                      >
+                        Delivered <span className="tab-badge">{campaignStats.completedCount}</span>
+                      </button>
+                      <button
+                        className={`campaign-tab ${campaignStatusFilter === 'scheduled' ? 'active' : ''}`}
+                        onClick={() => setCampaignStatusFilter('scheduled')}
+                      >
+                        Scheduled <span className="tab-badge">{campaignStats.scheduledCount}</span>
+                      </button>
+                      {(campaignStats.sendingCount > 0 || campaignStatusFilter === 'sending') && (
+                        <button
+                          className={`campaign-tab ${campaignStatusFilter === 'sending' ? 'active' : ''}`}
+                          onClick={() => setCampaignStatusFilter('sending')}
+                        >
+                          Sending <span className="tab-badge">{campaignStats.sendingCount}</span>
+                        </button>
+                      )}
+                      {(campaignStats.failedCount > 0 || campaignStatusFilter === 'failed') && (
+                        <button
+                          className={`campaign-tab ${campaignStatusFilter === 'failed' ? 'active' : ''}`}
+                          onClick={() => setCampaignStatusFilter('failed')}
+                        >
+                          Failed <span className="tab-badge">{campaignStats.failedCount}</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="campaign-toolbar-right">
+                    {(campaignSearchQuery || campaignStatusFilter !== 'all') && (
+                      <button
+                        className="reset-filters-link"
+                        onClick={() => {
+                          setCampaignSearchQuery('');
+                          setCampaignStatusFilter('all');
+                        }}
+                      >
+                        Reset filters
+                      </button>
+                    )}
+                    <span className="campaign-count-indicator">
+                      Showing <b>{filteredCampaigns.length}</b> of {recentCampaigns.length}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="table-wrap">
+                  <table className="campaign-modern-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: '44%' }}>CAMPAIGN</th>
+                        <th style={{ width: '16%' }}>AUDIENCE</th>
+                        <th style={{ width: '16%' }}>STATUS</th>
+                        <th style={{ width: '16%' }}>DATE</th>
+                        <th style={{ width: '8%', textAlign: 'right' }}>ACTION</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredCampaigns.map(c => {
+                        const dateDisplay = c.scheduled_at ? c.scheduled_at : c.created_at;
+                        const matchedTemplate = c.template_id ? templates.find(t => t.id === c.template_id) : null;
+
+                        return (
+                          <tr
+                            key={c.id}
+                            className="campaign-row"
+                            onClick={() => handleInspectCampaign(c)}
+                          >
+                            {/* Campaign Name & Subject preview */}
+                            <td>
+                              <div className="campaign-primary-cell">
+                                <div className="campaign-title-row">
+                                  <span className="campaign-name">{c.name}</span>
+                                  {matchedTemplate && (
+                                    <span className="campaign-template-pill" title={`Template: ${matchedTemplate.name}`}>
+                                      {matchedTemplate.name}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="campaign-subject-preview" title={c.subject}>
+                                  {c.subject || 'No subject'}
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* Audience */}
+                            <td>
+                              <span className="campaign-audience-text">
+                                {c.recipient_count} {c.recipient_count === 1 ? 'lead' : 'leads'}
+                              </span>
+                            </td>
+
+                            {/* Status */}
+                            <td>
+                              <span className={`apple-status-badge ${c.status}`}>
+                                <span className="status-dot" />
+                                {c.status === 'completed'
+                                  ? 'Delivered'
+                                  : c.status === 'scheduled'
+                                  ? 'Scheduled'
+                                  : c.status === 'sending'
+                                  ? 'Sending'
+                                  : c.status === 'failed'
+                                  ? 'Failed'
+                                  : c.status}
+                              </span>
+                            </td>
+
+                            {/* Date */}
+                            <td>
+                              <span className="campaign-date-text">
+                                {formatCampaignDate(dateDisplay)}
+                              </span>
+                            </td>
+
+                            {/* Quick Action */}
+                            <td style={{ textAlign: 'right' }}>
+                              <div className="campaign-row-actions" onClick={e => e.stopPropagation()}>
+                                <button
+                                  className="campaign-view-button"
+                                  title="View campaign details"
+                                  onClick={() => handleInspectCampaign(c)}
+                                >
+                                  View
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+
+                  {/* Empty State when no campaigns exist */}
+                  {!recentCampaigns.length && (
+                    <div className="campaign-empty-banner">
+                      <div className="empty-icon-circle">
+                        <Send size={24} />
+                      </div>
+                      <h3>No campaigns created yet</h3>
+                      <p>Create your first campaign to send targeted email outreach to your Meta leads via ZeptoMail.</p>
+                      <button className="button primary button-sm" onClick={() => openCampaign()}>
+                        <Plus size={14} /> Create your first campaign
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Empty State when filters yield no results */}
+                  {recentCampaigns.length > 0 && !filteredCampaigns.length && (
+                    <div className="campaign-empty-banner">
+                      <div className="empty-icon-circle">
+                        <Search size={22} />
+                      </div>
+                      <h3>No matching campaigns found</h3>
+                      <p>Try adjusting your search terms or status filter to see other campaigns.</p>
+                      <button
+                        className="button secondary button-sm"
+                        onClick={() => {
+                          setCampaignSearchQuery('');
+                          setCampaignStatusFilter('all');
+                        }}
+                      >
+                        Clear all filters
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              /* Automated Welcome Emails Audit Table Card */
+              <div className="table-card campaign-list-card">
+                <div className="campaign-toolbar">
+                  <div className="campaign-toolbar-left">
+                    <div className="searchbox campaign-search" style={{ width: 280 }}>
+                      <Search size={14} />
+                      <input
+                        type="text"
+                        placeholder="Search by recipient email or subject..."
+                        value={welcomeSearchQuery}
+                        onChange={e => setWelcomeSearchQuery(e.target.value)}
+                      />
+                      {welcomeSearchQuery && (
+                        <button
+                          className="clear-search-btn"
+                          onClick={() => setWelcomeSearchQuery('')}
+                          aria-label="Clear search"
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="welcome-live-banner-tag">
+                      <Sparkles size={13} style={{ color: '#16a34a' }} />
+                      <span>Permanent Delivery Audit · Preserved even if leads are deleted</span>
+                    </div>
+                  </div>
+
+                  <div className="campaign-toolbar-right">
+                    {welcomeSearchQuery && (
+                      <button
+                        className="reset-filters-link"
+                        onClick={() => setWelcomeSearchQuery('')}
+                      >
+                        Clear search
+                      </button>
+                    )}
+                    <span className="campaign-count-indicator">
+                      Showing <b>{filteredWelcomeRecords.length}</b> of {welcomeRecords.length} loaded ({welcomeTotalSent} total lifetime sent)
+                    </span>
+                  </div>
+                </div>
+
+                <div className="table-wrap">
+                  <table className="campaign-modern-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: '38%' }}>RECIPIENT</th>
+                        <th style={{ width: '32%' }}>AUTOMATION & SUBJECT</th>
+                        <th style={{ width: '15%' }}>STATUS</th>
+                        <th style={{ width: '15%' }}>DELIVERED AT</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredWelcomeRecords.map(w => (
+                        <tr key={w.id} className="campaign-row">
+                          <td>
+                            <div className="welcome-recipient-cell">
+                              <span className="welcome-avatar-icon">
+                                <Mail size={13} />
+                              </span>
+                              <span className="welcome-recipient-email" title={w.email}>
+                                {w.email}
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <div className="welcome-subject-cell">
+                              <span className="welcome-type-badge">
+                                ⚡ Automated Welcome
+                              </span>
+                              <span className="campaign-subject-preview" title={w.subject}>
+                                {w.subject || 'Lead Welcome & Follow-up'}
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <span className="apple-status-badge completed">
+                              <span className="status-dot" />
+                              Delivered
+                            </span>
+                          </td>
+                          <td>
+                            <span className="campaign-date-text">
+                              {formatCampaignDate(w.sentAt)}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {/* Empty State when no welcome emails sent */}
+                  {!welcomeRecords.length && (
+                    <div className="campaign-empty-banner">
+                      <div className="empty-icon-circle">
+                        <Sparkles size={24} style={{ color: '#16a34a' }} />
+                      </div>
+                      <h3>No welcome emails recorded yet</h3>
+                      <p>When leads arrive from Google Sheets or CSV with an active Welcome Template, automated delivery records are stored permanently here.</p>
+                      <button className="button primary button-sm" onClick={() => setActive('Templates')}>
+                        Configure Welcome Template
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Empty State when search matches nothing */}
+                  {welcomeRecords.length > 0 && !filteredWelcomeRecords.length && (
+                    <div className="campaign-empty-banner">
+                      <div className="empty-icon-circle">
+                        <Search size={22} />
+                      </div>
+                      <h3>No matching welcome email records found</h3>
+                      <p>Try searching with a different email address or keyword.</p>
+                      <button
+                        className="button secondary button-sm"
+                        onClick={() => setWelcomeSearchQuery('')}
+                      >
+                        Clear search
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </section>
         ) : (
           /* Redesigned Impeccable Overview Hub */
@@ -2306,14 +2543,14 @@ function App() {
               </div>
 
               {/* Tile 4: Automated Welcome Engine */}
-              <div className="kpi-panel" onClick={() => setActive('Templates')}>
+              <div className="kpi-panel" onClick={() => { setActive('Campaigns'); setOutboundTab('welcome'); }}>
                 <div className="kpi-panel-top">
                   <span className="kpi-label">Welcome Automation</span>
                   <span className="kpi-icon violet">
                     <MailCheck size={16} />
                   </span>
                 </div>
-                <div className="kpi-number">{welcomeEmailSummary.sent.toLocaleString()}</div>
+                <div className="kpi-number">{(welcomeTotalSent > 0 ? welcomeTotalSent : welcomeEmailSummary.sent).toLocaleString()}</div>
                 <div className="kpi-footer">
                   <span className={`kpi-badge ${welcomeTemplate ? 'mint' : 'muted'}`}>
                     {welcomeTemplate ? 'Active' : 'Off'}
@@ -2593,7 +2830,7 @@ function App() {
 
                     <div className="welcome-stats-strip">
                       <div className="stat-pill-box">
-                        <span className="stat-num">{welcomeEmailSummary.sent}</span>
+                        <span className="stat-num">{welcomeTotalSent > 0 ? welcomeTotalSent : welcomeEmailSummary.sent}</span>
                         <span className="stat-lbl">Delivered</span>
                       </div>
                       <div className="stat-pill-box">
@@ -2606,7 +2843,7 @@ function App() {
                       </div>
                     </div>
 
-                    <div className="welcome-footer-action">
+                    <div className="welcome-footer-action" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                       <button
                         className="button secondary button-sm welcome-config-btn"
                         onClick={() => setActive('Templates')}
@@ -2614,6 +2851,19 @@ function App() {
                         {welcomeTemplate ? 'Change template' : 'Configure welcome email'}
                         <ArrowRight size={13} />
                       </button>
+                      {welcomeTotalSent > 0 && (
+                        <button
+                          type="button"
+                          className="button secondary button-sm"
+                          onClick={() => {
+                            setActive('Campaigns');
+                            setOutboundTab('welcome');
+                          }}
+                          style={{ fontSize: '11px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                        >
+                          <History size={12} /> View all {welcomeTotalSent} records
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>

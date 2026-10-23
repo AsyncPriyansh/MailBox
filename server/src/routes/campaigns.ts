@@ -1,7 +1,93 @@
-import type {FastifyInstance} from 'fastify';import {z} from 'zod';import {supabase} from '../supabase.js';import {queueCampaign} from '../services/campaignService.js';
-const schema=z.object({name:z.string().min(1).max(160),subject:z.string().min(1).max(250),html:z.string().min(1).max(500000),leadIds:z.array(z.string().uuid()).min(1).max(10000),audienceStatus:z.enum(['new','contacted','qualified','all','selected']).optional(),scheduledAt:z.string().datetime().optional().nullable(),templateId:z.string().uuid().optional().nullable()});
-export async function registerCampaignRoutes(app:FastifyInstance){
- app.get('/v1/campaigns',async(req)=>{if(!supabase)throw new Error('Supabase is not configured.');const {data,error}=await supabase.from('campaigns').select('id,name,subject,status,recipient_count,sent_count,scheduled_at,created_at').eq('workspace_id',req.workspaceId).order('created_at',{ascending:false}).limit(100);if(error)throw error;return {campaigns:data||[]};});
- app.post('/v1/campaigns',async(req,reply)=>{const parsed=schema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:'Invalid campaign',details:parsed.error.flatten()});try{return await queueCampaign(parsed.data,req.workspaceId);}catch(e){const error=e as {message?:unknown;code?:unknown};const message=typeof error?.message==='string'?error.message:'Unable to queue campaign';req.log.error({err:e,code:error?.code},'Campaign queueing failed');return reply.code(400).send({error:message,code:typeof error?.code==='string'?error.code:undefined});}});
- app.get('/v1/dashboard/stats',async(req)=>{if(!supabase)throw new Error('Supabase is not configured.');const workspace=req.workspaceId;const [all,newLeads,contacted,campaigns]=await Promise.all([supabase.from('contacts').select('id',{count:'exact',head:true}).eq('workspace_id',workspace),supabase.from('contacts').select('id',{count:'exact',head:true}).eq('workspace_id',workspace).eq('status','new'),supabase.from('contacts').select('id',{count:'exact',head:true}).eq('workspace_id',workspace).eq('status','contacted'),supabase.from('campaigns').select('id,name,subject,status,recipient_count,sent_count,scheduled_at,created_at').eq('workspace_id',workspace).order('created_at',{ascending:false}).limit(5)]);for(const result of [all,newLeads,contacted,campaigns])if(result.error)throw result.error;return {stats:{totalLeads:all.count||0,newLeads:newLeads.count||0,contactedLeads:contacted.count||0},recentCampaigns:campaigns.data||[]};});
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { supabase } from '../supabase.js';
+import { queueCampaign } from '../services/campaignService.js';
+
+const schema = z.object({
+  name: z.string().min(1).max(160),
+  subject: z.string().min(1).max(250),
+  html: z.string().min(1).max(500000),
+  leadIds: z.array(z.string().uuid()).min(1).max(10000),
+  audienceStatus: z.enum(['new', 'contacted', 'qualified', 'all', 'selected']).optional(),
+  scheduledAt: z.string().datetime().optional().nullable(),
+  templateId: z.string().uuid().optional().nullable()
+});
+
+export async function registerCampaignRoutes(app: FastifyInstance) {
+  app.get('/v1/campaigns', async (req) => {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const { data, error } = await supabase
+      .from('campaigns')
+      .select('id,name,subject,status,recipient_count,sent_count,scheduled_at,created_at')
+      .eq('workspace_id', req.workspaceId)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (error) throw error;
+    return { campaigns: data || [] };
+  });
+
+  app.get('/v1/welcome-emails', async (req) => {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const workspace = req.workspaceId;
+    const { data, count, error } = await supabase
+      .from('email_events')
+      .select('id, email, event_type, event_data, occurred_at', { count: 'exact' })
+      .eq('workspace_id', workspace)
+      .is('campaign_id', null)
+      .eq('event_type', 'sent')
+      .order('occurred_at', { ascending: false })
+      .limit(500);
+
+    if (error) throw error;
+    return {
+      total: count || 0,
+      records: (data || []).map((r: any) => ({
+        id: r.id,
+        email: r.email,
+        status: r.event_type === 'sent' ? 'delivered' : r.event_type,
+        sentAt: r.occurred_at,
+        provider: r.event_data?.provider || 'zeptomail',
+        messageId: r.event_data?.messageId || null,
+        subject: r.event_data?.subject || 'Lead Welcome & Follow-up'
+      }))
+    };
+  });
+
+  app.post('/v1/campaigns', async (req, reply) => {
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Invalid campaign', details: parsed.error.flatten() });
+    try {
+      return await queueCampaign(parsed.data, req.workspaceId);
+    } catch (e) {
+      const error = e as { message?: unknown; code?: unknown };
+      const message = typeof error?.message === 'string' ? error.message : 'Unable to queue campaign';
+      req.log.error({ err: e, code: error?.code }, 'Campaign queueing failed');
+      return reply.code(400).send({ error: message, code: typeof error?.code === 'string' ? error.code : undefined });
+    }
+  });
+
+  app.get('/v1/dashboard/stats', async (req) => {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const workspace = req.workspaceId;
+    const [all, newLeads, contacted, campaigns, welcomeEvents] = await Promise.all([
+      supabase.from('contacts').select('id', { count: 'exact', head: true }).eq('workspace_id', workspace),
+      supabase.from('contacts').select('id', { count: 'exact', head: true }).eq('workspace_id', workspace).eq('status', 'new'),
+      supabase.from('contacts').select('id', { count: 'exact', head: true }).eq('workspace_id', workspace).eq('status', 'contacted'),
+      supabase.from('campaigns').select('id,name,subject,status,recipient_count,sent_count,scheduled_at,created_at').eq('workspace_id', workspace).order('created_at', { ascending: false }).limit(5),
+      supabase.from('email_events').select('id', { count: 'exact', head: true }).eq('workspace_id', workspace).is('campaign_id', null).eq('event_type', 'sent')
+    ]);
+    for (const result of [all, newLeads, contacted, campaigns, welcomeEvents]) {
+      if (result.error) throw result.error;
+    }
+    return {
+      stats: {
+        totalLeads: all.count || 0,
+        newLeads: newLeads.count || 0,
+        contactedLeads: contacted.count || 0,
+        welcomeEmailsSent: welcomeEvents.count || 0
+      },
+      recentCampaigns: campaigns.data || []
+    };
+  });
 }
+

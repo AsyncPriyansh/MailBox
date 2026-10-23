@@ -1198,10 +1198,37 @@ function App() {
                 </div>
                 <div className="source-meta">
                   <div className="source-title-row">
-                    <b className="source-title">Meta Lead Ads spreadsheet</b>
+                    <b className="source-title">
+                      {sheetsStatus?.configured ? (
+                        sheetsStatus.spreadsheetUrl ? (
+                          <a
+                            href={sheetsStatus.spreadsheetUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              color: '#166534',
+                              textDecoration: 'none',
+                              fontWeight: 700
+                            }}
+                            title="Open currently syncing Google Sheet in new tab"
+                          >
+                            <FileSpreadsheet size={16} style={{ color: '#16a34a' }} />
+                            <span>{sheetsStatus.spreadsheetTitle || (sheetsStatus.spreadsheetId ? `Sheet: ${sheetsStatus.spreadsheetId.slice(0, 18)}…` : 'Connected Google Sheet')}</span>
+                            <ExternalLink size={12} />
+                          </a>
+                        ) : (
+                          <span>{sheetsStatus.spreadsheetTitle || 'Connected Google Sheet'}</span>
+                        )
+                      ) : (
+                        'Meta Lead Ads spreadsheet'
+                      )}
+                    </b>
                     <span className={`connected-pill ${sheetsStatus?.configured ? 'is-connected' : 'is-pending'}`}>
                       <i />
-                      {sheetsStatus?.configured ? 'Google Sheets live sync' : 'Not connected'}
+                      {sheetsStatus?.configured ? 'Live Sync Active' : 'Not connected'}
                     </span>
                     {sheetsStatus?.lastError && (
                       <span className="sheets-error-pill" title={sheetsStatus.lastError}>
@@ -1212,28 +1239,9 @@ function App() {
                   <p className="source-subtitle">
                     {sheetsStatus?.configured ? (
                       <>
-                        <span className="source-account-badge">{sheetsStatus.googleEmail || 'Google Sheets'}</span>
+                        <span className="source-account-badge">Account: {sheetsStatus.googleEmail || 'Google'}</span>
                         <span className="source-sep">·</span>
-                        {sheetsStatus.spreadsheetUrl ? (
-                          <a
-                            href={sheetsStatus.spreadsheetUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="source-sheet-link-badge"
-                            title="Open connected Google Sheet in new tab"
-                            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--color-primary, #2563eb)', textDecoration: 'none', fontWeight: 600 }}
-                          >
-                            <FileSpreadsheet size={13} />
-                            {sheetsStatus.spreadsheetTitle || (sheetsStatus.spreadsheetId ? `${sheetsStatus.spreadsheetId.slice(0, 18)}…` : 'Connected Sheet')}
-                            <ExternalLink size={11} />
-                          </a>
-                        ) : (
-                          <span className="source-range-badge">
-                            {sheetsStatus.spreadsheetTitle || (sheetsStatus.spreadsheetId ? `${sheetsStatus.spreadsheetId.slice(0, 18)}…` : 'Connected Sheet')}
-                          </span>
-                        )}
-                        <span className="source-sep">·</span>
-                        <span className="source-range-badge">{sheetsStatus.range}</span>
+                        <span className="source-range-badge">Tab: {sheetsStatus.range}</span>
                         <span className="source-sep">·</span>
                         <span className="source-sync-time">
                           {sheetsStatus.lastSyncedAt
@@ -3290,6 +3298,43 @@ function App() {
                       Change account
                     </button>
                   </div>
+
+                  {sheetsStatus?.configured && (
+                    <div className="current-sheet-status-box" style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '12px 14px', borderRadius: '10px', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+                      <div>
+                        <div style={{ fontSize: '10px', fontWeight: 700, color: '#166534', textTransform: 'uppercase', letterSpacing: '0.6px' }}>Currently Synced Spreadsheet</div>
+                        <div style={{ fontSize: '14px', fontWeight: 700, color: '#14532d', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <FileSpreadsheet size={16} />
+                          {sheetsStatus.spreadsheetUrl ? (
+                            <a
+                              href={sheetsStatus.spreadsheetUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ color: '#166534', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                              title="Open this Google Sheet in new tab"
+                            >
+                              <span>{sheetsStatus.spreadsheetTitle || (sheetsStatus.spreadsheetId ? `${sheetsStatus.spreadsheetId.slice(0, 24)}…` : 'Google Sheet')}</span>
+                              <ExternalLink size={12} />
+                            </a>
+                          ) : (
+                            <span>{sheetsStatus.spreadsheetTitle || sheetsStatus.spreadsheetId}</span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#3f6212', marginTop: '3px' }}>
+                          Tab: <b>{sheetsStatus.range}</b> · Auto-syncs every {sheetsStatus.intervalMinutes || 5} min
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="button secondary button-sm"
+                        style={{ color: '#ef4444', borderColor: '#fca5a5', background: '#fff' }}
+                        onClick={handleDisconnectSheetWithConfirm}
+                        title="Disconnect this sheet from auto-sync"
+                      >
+                        <Unlink size={12} /> Disconnect
+                      </button>
+                    </div>
+                  )}
 
                   <form className="sheet-config-form" onSubmit={saveGoogleSheet}>
                     <div className="form-group">

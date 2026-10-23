@@ -81,6 +81,14 @@ export async function syncWorkspaceSheet(workspaceId:string){
   const stored=await connection(workspaceId);if(!stored.spreadsheet_id)throw new Error('Paste your spreadsheet link to finish setup.');
   const oauth=googleOAuthClient();oauth.setCredentials({refresh_token:decryptToken(stored.encrypted_refresh_token)});
   const sheets=google.sheets({version:'v4',auth:oauth});
+  if (!stored.spreadsheet_title && supabase) {
+    try {
+      const meta = await sheets.spreadsheets.get({ spreadsheetId: stored.spreadsheet_id, fields: 'properties.title' });
+      if (meta.data.properties?.title) {
+        await supabase.from('google_sheet_connections').update({ spreadsheet_title: meta.data.properties.title }).eq('workspace_id', workspaceId);
+      }
+    } catch {}
+  }
   const response=await sheets.spreadsheets.values.get({spreadsheetId:stored.spreadsheet_id,range:stored.sheet_range||'Leads!A1:Z5000'});
   const values=(response.data.values||[]) as unknown[][];if(values.length>5001)throw new Error('The configured range exceeds 5,000 data rows. Narrow it and sync again.');
   const leads=mapRows(values);const result=await upsertLeads(leads,workspaceId);const timestamp=new Date().toISOString();await saveSyncState(workspaceId,{lastSyncedAt:timestamp,lastImported:result.imported,lastError:null});

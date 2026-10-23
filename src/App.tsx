@@ -16,7 +16,6 @@ import {
   Code2,
   Eye,
   FileSpreadsheet,
-  HelpCircle,
   LayoutDashboard,
   CalendarDays,
   FileText,
@@ -37,6 +36,9 @@ import {
   Users,
   X,
   Trash2,
+  Clock,
+  Copy,
+  TrendingUp,
 } from 'lucide-react';
 import type { Lead } from './types/domain';
 import { ApiError } from './services/http';
@@ -86,12 +88,22 @@ function App() {
   const [leads, setLeads] = useState<UiLead[]>([]);
   const [stats, setStats] = useState({ totalLeads: 0, newLeads: 0, contactedLeads: 0 });
   const [recentCampaigns, setRecentCampaigns] = useState<any[]>([]);
+  const [campaignSearchQuery, setCampaignSearchQuery] = useState('');
+  const [campaignStatusFilter, setCampaignStatusFilter] = useState<'all' | 'completed' | 'scheduled' | 'sending' | 'failed'>('all');
+  const [selectedCampaignDetail, setSelectedCampaignDetail] = useState<any | null>(null);
+  const [refreshingCampaigns, setRefreshingCampaigns] = useState(false);
   const [dataReady, setDataReady] = useState(false);
   const [serviceError, setServiceError] = useState('');
   const [active, setActive] = useState<'Overview' | 'Leads' | 'Campaigns' | 'Templates' | 'Calendar' | 'Suppression list' | 'Settings'>('Leads');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('All leads');
-  const [timeRange, setTimeRange] = useState<'all' | 'today' | '7days' | '30days' | '90days' | 'year'>('all');
+  const [overviewLeadFilter, setOverviewLeadFilter] = useState<'uncontacted' | 'all'>('uncontacted');
+  const [timeRange, setTimeRange] = useState<'all' | 'today' | '7days' | '30days' | '90days' | 'year' | 'custom'>('all');
+  const [customStartDate, setCustomStartDate] = useState('');
+  const [customEndDate, setCustomEndDate] = useState('');
+  const [campaignDateFilterEnabled, setCampaignDateFilterEnabled] = useState(false);
+  const [campaignFromDate, setCampaignFromDate] = useState('');
+  const [campaignToDate, setCampaignToDate] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
   const [campaignAudience, setCampaignAudience] = useState<CampaignAudience>('new');
   const [modal, setModal] = useState<'import' | 'campaign' | null>(null);
@@ -110,6 +122,7 @@ function App() {
   const [sheetUrl,setSheetUrl]=useState('');
   const [sheetRange,setSheetRange]=useState('Leads!A1:Z5000');
   const [syncingSheet,setSyncingSheet]=useState(false);
+  const [clearBeforeSync, setClearBeforeSync] = useState(false);
   const [emailHtml,setEmailHtml]=useState('');
   const [editingTemplate,setEditingTemplate]=useState<EmailTemplate|null>(null);
   const [pasteHtmlOpen, setPasteHtmlOpen] = useState(false);
@@ -121,6 +134,8 @@ function App() {
   const [scheduleAt,setScheduleAt]=useState('');
   const [calendarMonth,setCalendarMonth]=useState(()=>new Date());
   const [fileName, setFileName] = useState('meta-leads-october.csv');
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const [importingCsv, setImportingCsv] = useState(false);
   const [notice, setNotice] = useState('');
   const [confirmDialog, setConfirmDialog] = useState<{
     open: boolean;
@@ -221,7 +236,7 @@ function App() {
   const filtered = useMemo(() => {
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const rangeStarts: Record<typeof timeRange, number> = {
+    const rangeStarts: Record<Exclude<typeof timeRange, 'custom'>, number> = {
       all: Number.NEGATIVE_INFINITY,
       today: startOfToday,
       '7days': startOfToday - 6 * 24 * 60 * 60 * 1000,
@@ -239,9 +254,22 @@ function App() {
       const matchesStatus = filter === 'All leads' || l.status === filter.toLowerCase();
       if (!matchesStatus) return false;
 
-      return new Date(l.createdAt).getTime() >= rangeStarts[timeRange];
+      const leadMs = new Date(l.createdAt).getTime();
+      if (timeRange === 'custom') {
+        if (customStartDate) {
+          const fromMs = new Date(`${customStartDate}T00:00:00`).getTime();
+          if (leadMs < fromMs) return false;
+        }
+        if (customEndDate) {
+          const toMs = new Date(`${customEndDate}T23:59:59.999`).getTime();
+          if (leadMs > toMs) return false;
+        }
+        return true;
+      }
+
+      return leadMs >= rangeStarts[timeRange];
     });
-  }, [leads, query, filter, timeRange]);
+  }, [leads, query, filter, timeRange, customStartDate, customEndDate]);
 
   const sortedFiltered = useMemo(() => [...filtered].sort((a, b) => {
     const delta = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
@@ -251,12 +279,12 @@ function App() {
   const pageCount = Math.max(1, Math.ceil(sortedFiltered.length / leadsPerPage));
   const visibleLeads = sortedFiltered.slice((leadPage - 1) * leadsPerPage, leadPage * leadsPerPage);
 
-  useEffect(() => { setLeadPage(1); }, [query, filter, timeRange]);
+  useEffect(() => { setLeadPage(1); }, [query, filter, timeRange, customStartDate, customEndDate]);
 
   const selectedRangeCount = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const starts: Record<typeof timeRange, number> = {
+    const starts: Record<Exclude<typeof timeRange, 'custom'>, number> = {
       all: Number.NEGATIVE_INFINITY,
       today: today.getTime(),
       '7days': today.getTime() - 6 * 24 * 60 * 60 * 1000,
@@ -264,8 +292,16 @@ function App() {
       '90days': today.getTime() - 89 * 24 * 60 * 60 * 1000,
       year: new Date(today.getFullYear(), 0, 1).getTime(),
     };
+    if (timeRange === 'custom') {
+      const fromMs = customStartDate ? new Date(`${customStartDate}T00:00:00`).getTime() : -Infinity;
+      const toMs = customEndDate ? new Date(`${customEndDate}T23:59:59.999`).getTime() : Infinity;
+      return leads.filter(lead => {
+        const ms = new Date(lead.createdAt).getTime();
+        return ms >= fromMs && ms <= toMs;
+      }).length;
+    }
     return leads.filter(lead => new Date(lead.createdAt).getTime() >= starts[timeRange]).length;
-  }, [leads, timeRange]);
+  }, [leads, timeRange, customStartDate, customEndDate]);
 
   const toggle = (id: string) =>
     setSelected(s => (s.includes(id) ? s.filter(x => x !== id) : [...s, id]));
@@ -290,7 +326,79 @@ function App() {
 
   const syncGoogleSheet = async()=>{setSyncingSheet(true);try{const result=await googleSheetsApi.syncNow();const [leadResult,dashboard,sheetStatus]=await Promise.all([leadsApi.list(),dashboardApi.stats(),googleSheetsApi.status()]);setLeads(leadResult.leads.map(toUiLead));setStats(dashboard.stats);setSheetsStatus(sheetStatus);setNotice(`Google Sheet synced: ${result.imported} lead rows processed.`);}catch(error){setNotice(error instanceof Error?error.message:'Google Sheets sync failed.');}finally{setSyncingSheet(false);}};
   const connectGoogle=async()=>{try{const{authUrl}=await googleSheetsApi.connectUrl();window.location.assign(authUrl);}catch(error){setNotice(error instanceof Error?error.message:'Could not start Google connection.');}};
-  const saveGoogleSheet=async(e:FormEvent)=>{e.preventDefault();setSyncingSheet(true);try{const result=await googleSheetsApi.saveSheet(sheetUrl,sheetRange);const[status,leadResult,dashboard]=await Promise.all([googleSheetsApi.status(),leadsApi.list(),dashboardApi.stats()]);setSheetsStatus(status);setLeads(leadResult.leads.map(toUiLead));setStats(dashboard.stats);setSheetSetupOpen(false);setNotice(`Connected ${result.spreadsheetTitle||'Google Sheet'} and synced ${result.imported} leads.`);}catch(error){setNotice(error instanceof Error?error.message:'Could not connect spreadsheet.');}finally{setSyncingSheet(false);}};
+  const clearAllOldLeads = () => {
+    setConfirmDialog({
+      open: true,
+      title: 'Delete all old leads?',
+      message: `Are you sure you want to permanently delete all ${leads.length} leads in this workspace? This will clear out old sheet records so you can connect a new sheet and start completely fresh. This action cannot be undone.`,
+      confirmLabel: 'Yes, delete old leads',
+      isDestructive: true,
+      onConfirm: async () => {
+        setSyncingSheet(true);
+        try {
+          const res = await leadsApi.clearAll();
+          await fetchWorkspaceData();
+          setSelected([]);
+          setNotice(`Cleared ${res.deleted || leads.length} old leads. Your workspace is ready for a fresh sheet!`);
+        } catch (err) {
+          setNotice(err instanceof Error ? err.message : 'Failed to clear old leads.');
+        } finally {
+          setSyncingSheet(false);
+        }
+      },
+    });
+  };
+
+  const deleteSelectedLeads = () => {
+    if (!selected.length) return;
+    setConfirmDialog({
+      open: true,
+      title: `Delete ${selected.length} selected leads?`,
+      message: `Are you sure you want to permanently delete ${selected.length} selected leads from this workspace? This cannot be undone.`,
+      confirmLabel: 'Delete leads',
+      isDestructive: true,
+      onConfirm: async () => {
+        try {
+          const res = await leadsApi.deleteSelected(selected);
+          await fetchWorkspaceData();
+          setSelected([]);
+          setNotice(`Deleted ${res.deleted || selected.length} leads.`);
+        } catch (err) {
+          setNotice(err instanceof Error ? err.message : 'Could not delete selected leads.');
+        }
+      },
+    });
+  };
+
+  const saveGoogleSheet = async (e: FormEvent) => {
+    e.preventDefault();
+    setSyncingSheet(true);
+    try {
+      if (clearBeforeSync && leads.length > 0) {
+        await leadsApi.clearAll();
+      }
+      const result = await googleSheetsApi.saveSheet(sheetUrl, sheetRange);
+      const [status, leadResult, dashboard] = await Promise.all([
+        googleSheetsApi.status(),
+        leadsApi.list(),
+        dashboardApi.stats(),
+      ]);
+      setSheetsStatus(status);
+      setLeads(leadResult.leads.map(toUiLead));
+      setStats(dashboard.stats);
+      setSheetSetupOpen(false);
+      setClearBeforeSync(false);
+      setNotice(
+        clearBeforeSync
+          ? `Cleared old leads and connected ${result.spreadsheetTitle || 'Google Sheet'} with ${result.imported} fresh leads.`
+          : `Connected ${result.spreadsheetTitle || 'Google Sheet'} and synced ${result.imported} leads.`
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not connect spreadsheet.');
+    } finally {
+      setSyncingSheet(false);
+    }
+  };
   const disconnectGoogle=async()=>{try{await googleSheetsApi.disconnect();setSheetsStatus(await googleSheetsApi.status());setNotice('Google Sheets disconnected.');}catch(error){setNotice(error instanceof Error?error.message:'Could not disconnect Google.');}};
 
   const parseCSV = async (text: string) => {
@@ -306,13 +414,29 @@ function App() {
     }
   };
 
+  const handleProcessImportFile = (f: File) => {
+    setFileName(f.name);
+    setImportingCsv(true);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        await parseCSV(String(reader.result || ''));
+      } finally {
+        setImportingCsv(false);
+      }
+    };
+    reader.onerror = () => {
+      setImportingCsv(false);
+      setNotice('Could not read the selected file.');
+    };
+    reader.readAsText(f);
+  };
+
   const onFile = (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    setFileName(f.name);
-    const reader = new FileReader();
-    reader.onload = () => parseCSV(String(reader.result || ''));
-    reader.readAsText(f);
+    handleProcessImportFile(f);
+    e.target.value = '';
   };
 
   const onTemplateSaved=(template:EmailTemplate)=>{setTemplates(current=>[template,...current.filter(item=>item.id!==template.id)]);setEditingTemplate(template);setTemplateStudioOpen(false);setNotice(`Saved “${template.name}” as version ${template.version_number}.`);};
@@ -387,14 +511,42 @@ function App() {
 
   const campaignRecipients = leads.filter(lead => {
     if (lead.status === 'unsubscribed') return false;
-    if (campaignAudience === 'all') return true;
-    if (campaignAudience === 'selected') return selected.includes(lead.id);
-    return lead.status === campaignAudience;
+    if (campaignAudience === 'selected') {
+      if (!selected.includes(lead.id)) return false;
+    } else if (campaignAudience !== 'all' && lead.status !== campaignAudience) {
+      return false;
+    }
+
+    if (campaignDateFilterEnabled) {
+      const leadTime = new Date(lead.createdAt).getTime();
+      if (campaignFromDate) {
+        const fromMs = new Date(`${campaignFromDate}T00:00:00`).getTime();
+        if (leadTime < fromMs) return false;
+      }
+      if (campaignToDate) {
+        const toMs = new Date(`${campaignToDate}T23:59:59.999`).getTime();
+        if (leadTime > toMs) return false;
+      }
+    }
+
+    return true;
   });
   const activeSelectedLeadCount = leads.filter(lead => selected.includes(lead.id) && lead.status !== 'unsubscribed').length;
 
-  const openCampaign = (audience: CampaignAudience = 'new') => {
+  const openCampaign = (
+    audience: CampaignAudience = 'new',
+    options?: { dateFilterEnabled?: boolean; fromDate?: string; toDate?: string }
+  ) => {
     setCampaignAudience(audience);
+    if (options?.dateFilterEnabled !== undefined) {
+      setCampaignDateFilterEnabled(options.dateFilterEnabled);
+      setCampaignFromDate(options.fromDate || '');
+      setCampaignToDate(options.toDate || '');
+    } else if (timeRange === 'custom' && (customStartDate || customEndDate)) {
+      setCampaignDateFilterEnabled(true);
+      setCampaignFromDate(customStartDate);
+      setCampaignToDate(customEndDate);
+    }
     setModal('campaign');
   };
 
@@ -409,7 +561,7 @@ function App() {
 
     if (!campaignName.trim() || !finalHtml.trim()) return;
     if (!campaignRecipients.length) {
-      setNotice('No active leads match this audience category. Choose another category before sending.');
+      setNotice('No active leads match this audience and date criteria. Choose another date range or category before sending.');
       return;
     }
     setBusy(true);
@@ -432,6 +584,9 @@ function App() {
       setEmailHtml('');
       setScheduleAt('');
       setSelectedTemplateId('');
+      setCampaignDateFilterEnabled(false);
+      setCampaignFromDate('');
+      setCampaignToDate('');
       void fetchWorkspaceData();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Unable to queue campaign.');
@@ -467,6 +622,125 @@ function App() {
     return leads.filter(l => new Date(l.createdAt) >= sevenDaysAgo).length;
   }, [leads]);
 
+  // Campaign History Helpers & Metrics
+  const formatCampaignDate = (dateStr?: string | null) => {
+    if (!dateStr) return '—';
+    try {
+      const d = new Date(dateStr);
+      return d.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const formatRelativeTime = (dateStr?: string | null) => {
+    if (!dateStr) return '';
+    try {
+      const d = new Date(dateStr);
+      const diffMs = Date.now() - d.getTime();
+      const diffMins = Math.round(diffMs / (1000 * 60));
+      const diffHours = Math.round(diffMs / (1000 * 60 * 60));
+      const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+
+      if (diffMs < 0) {
+        const absDiffDays = Math.abs(diffDays);
+        const absDiffHours = Math.abs(diffHours);
+        if (absDiffDays >= 1) return `in ${absDiffDays}d`;
+        if (absDiffHours >= 1) return `in ${absDiffHours}h`;
+        return 'soon';
+      }
+      if (diffMins < 1) return 'just now';
+      if (diffMins < 60) return `${diffMins}m ago`;
+      if (diffHours < 24) return `${diffHours}h ago`;
+      if (diffDays < 30) return `${diffDays}d ago`;
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    } catch {
+      return '';
+    }
+  };
+
+  const campaignStats = useMemo(() => {
+    const totalCampaigns = recentCampaigns.length;
+    const totalSent = recentCampaigns.reduce((acc, c) => acc + (Number(c.sent_count) || 0), 0);
+    const totalRecipients = recentCampaigns.reduce((acc, c) => acc + (Number(c.recipient_count) || 0), 0);
+    const completedCount = recentCampaigns.filter(c => c.status === 'completed').length;
+    const scheduledCount = recentCampaigns.filter(c => c.status === 'scheduled').length;
+    const sendingCount = recentCampaigns.filter(c => c.status === 'sending').length;
+    const failedCount = recentCampaigns.filter(c => c.status === 'failed').length;
+    const deliveryRate = totalRecipients > 0 ? Math.round((totalSent / totalRecipients) * 100) : 100;
+
+    return {
+      totalCampaigns,
+      totalSent,
+      totalRecipients,
+      completedCount,
+      scheduledCount,
+      sendingCount,
+      failedCount,
+      deliveryRate,
+    };
+  }, [recentCampaigns]);
+
+  const filteredCampaigns = useMemo(() => {
+    return recentCampaigns.filter(c => {
+      if (campaignStatusFilter !== 'all' && c.status !== campaignStatusFilter) {
+        return false;
+      }
+      if (campaignSearchQuery.trim()) {
+        const q = campaignSearchQuery.toLowerCase();
+        const matchName = (c.name || '').toLowerCase().includes(q);
+        const matchSubject = (c.subject || '').toLowerCase().includes(q);
+        const matchId = (c.id || '').toLowerCase().includes(q);
+        if (!matchName && !matchSubject && !matchId) return false;
+      }
+      return true;
+    });
+  }, [recentCampaigns, campaignStatusFilter, campaignSearchQuery]);
+
+  const handleCopySubject = (subjectText: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (!subjectText) return;
+    void (navigator.clipboard?.writeText(subjectText) || Promise.resolve())
+      .then(() => setNotice(`Copied subject to clipboard.`))
+      .catch(() => setNotice('Unable to copy to clipboard.'));
+  };
+
+  const handleDuplicateCampaign = (c: any, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setCampaignName(`${c.name} (Copy)`);
+    setSubject(c.subject || '');
+    if (c.template_id) {
+      setSelectedTemplateId(c.template_id);
+    }
+    openCampaign('new');
+    setNotice(`Loaded campaign settings from "${c.name}".`);
+  };
+
+  const handleInspectCampaign = (c: any) => {
+    setSelectedCampaignDetail(c);
+  };
+
+  const handleRefreshCampaigns = async () => {
+    setRefreshingCampaigns(true);
+    try {
+      const res = await campaignsApi.list();
+      if (res.campaigns) {
+        setRecentCampaigns(res.campaigns);
+        setNotice('Campaign history updated.');
+      }
+    } catch {
+      setNotice('Could not refresh campaigns.');
+    } finally {
+      setRefreshingCampaigns(false);
+    }
+  };
+
   const welcomeTemplate = emailSettings?.welcomeTemplate || null;
   const hasMetaFormDetails = leads.some(lead => lead.formName || lead.sourceLeadStatus);
   const welcomeEmailSummary = useMemo(() => ({
@@ -475,6 +749,36 @@ function App() {
     failed: leads.filter(lead => lead.welcomeEmailStatus === 'failed' || lead.welcomeEmailStatus === 'bounced').length,
     notSent: leads.filter(lead => !lead.welcomeEmailStatus).length,
   }), [leads]);
+
+  const conversionRate = useMemo(() => {
+    if (!leads.length) return 0;
+    const reached = leads.filter(l => l.status === 'contacted' || l.status === 'qualified').length;
+    return Math.round((reached / leads.length) * 100);
+  }, [leads]);
+
+  const overviewFilteredLeads = useMemo(() => {
+    if (overviewLeadFilter === 'uncontacted') {
+      return leads.filter(l => l.status === 'new');
+    }
+    return leads;
+  }, [leads, overviewLeadFilter]);
+
+  const leadSourceBreakdown = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const l of leads) {
+      const key = l.formName || l.campaign || l.source || 'Meta Lead Ads';
+      counts[key] = (counts[key] || 0) + 1;
+    }
+    const total = leads.length || 1;
+    return Object.entries(counts)
+      .map(([name, count]) => ({
+        name,
+        count,
+        pct: Math.round((count / total) * 100),
+      }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 4);
+  }, [leads]);
 
   const welcomeSummaryPanel = (
     <div className="welcome-summary-panel">
@@ -582,94 +886,90 @@ function App() {
         </div>
       )}
 
-      {/* Sidebar Navigation */}
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">
-            <Mail size={17} />
+      {/* Apple Sidebar Navigation (Pearl / Light Canvas with Hairline & Action Blue Pills) */}
+      <aside className="apple-sidebar">
+        <div className="apple-sidebar-brand">
+          <div className="apple-sidebar-logo">
+            <Mail size={16} />
           </div>
-          <span className="brand-title">Mailbox</span>
-          <span className="brand-beta">BETA</span>
+          <span className="apple-sidebar-title">Mailbox</span>
+          <span className="apple-sidebar-badge">BETA</span>
         </div>
 
-        <div className="nav-label">NAVIGATION</div>
-        <nav>
+        <div className="apple-sidebar-section-label">MAIN</div>
+        <nav className="apple-sidebar-nav">
           {[
             { name: 'Overview', icon: LayoutDashboard },
-            { name: 'Leads', icon: Users },
+            { name: 'Leads', icon: Users, count: leads.length },
             { name: 'Campaigns', icon: Send },
             { name: 'Templates', icon: FileText },
             { name: 'Calendar', icon: CalendarDays },
-          ].map(n => {
-            const Icon = n.icon;
-            const isTabActive = active === n.name;
+          ].map(item => {
+            const Icon = item.icon;
+            const isTabActive = active === item.name;
             return (
               <button
-                key={n.name}
-                onClick={() => setActive(n.name as any)}
-                className={`nav-item ${isTabActive ? 'active' : ''}`}
+                key={item.name}
+                onClick={() => setActive(item.name as any)}
+                className={`apple-sidebar-link ${isTabActive ? 'active' : ''}`}
               >
-                <Icon size={16} />
-                <span>{n.name}</span>
-                {n.name === 'Leads' && <small className="nav-count">{leads.length}</small>}
+                <Icon size={16} className="apple-sidebar-icon" />
+                <span className="apple-sidebar-link-text">{item.name}</span>
+                {item.count !== undefined && (
+                  <span className="apple-sidebar-count">{item.count}</span>
+                )}
               </button>
             );
           })}
         </nav>
 
-        <div className="sidebar-separator" />
-        <div className="nav-label">MANAGEMENT</div>
-        <nav>
+        <div className="apple-sidebar-separator" />
+        <div className="apple-sidebar-section-label">MANAGEMENT</div>
+        <nav className="apple-sidebar-nav">
           <button
-            className={`nav-item ${active === 'Suppression list' ? 'active' : ''}`}
+            className={`apple-sidebar-link ${active === 'Suppression list' ? 'active' : ''}`}
             onClick={() => setActive('Suppression list')}
           >
-            <ShieldCheck size={16} />
-            <span>Suppression list</span>
-            <small className="coming-soon-badge">Soon</small>
+            <ShieldCheck size={16} className="apple-sidebar-icon" />
+            <span className="apple-sidebar-link-text">Suppression List</span>
+            <span className="apple-sidebar-soon">Soon</span>
           </button>
           <button
-            className={`nav-item ${active === 'Settings' ? 'active' : ''}`}
+            className={`apple-sidebar-link ${active === 'Settings' ? 'active' : ''}`}
             onClick={() => setActive('Settings')}
           >
-            <Settings2 size={16} />
-            <span>Settings</span>
+            <Settings2 size={16} className="apple-sidebar-icon" />
+            <span className="apple-sidebar-link-text">Settings</span>
           </button>
         </nav>
 
-        <div className="sidebar-bottom">
-          <div className="provider-card">
-            <div className="provider-icon">
-              <MailCheck size={16} />
-            </div>
-            <div>
-              <b>Sending with ZeptoMail</b>
-              <small>
-                <i /> Verified sender configured on server
-              </small>
-            </div>
-            <button
-              aria-label="Provider settings"
-              onClick={() => setNotice('Ask your administrator to configure a verified sender address in ZeptoMail.')}
-            >
-              <MoreHorizontal size={15} />
-            </button>
-          </div>
-
-          <div className="profile" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', overflow: 'hidden' }}>
-              <div className="profile-avatar">{currentUser?.name ? currentUser.name.charAt(0).toUpperCase() : 'M'}</div>
-              <div className="profile-info" style={{ overflow: 'hidden' }}>
-                <b style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentUser?.name || 'Metabull Media'}</b>
-                <small style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentUser?.email || 'Admin'}</small>
+        <div className="apple-sidebar-footer">
+          <div className="apple-sidebar-profile-card">
+            <div className="apple-profile-info">
+              <div className="apple-profile-avatar">
+                {currentUser?.name ? currentUser.name.charAt(0).toUpperCase() : 'M'}
+              </div>
+              <div className="apple-profile-details">
+                <span className="apple-profile-name">{currentUser?.name || 'Metabull'}</span>
+                <span className="apple-profile-email">{currentUser?.email || 'admin@metabull.com'}</span>
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <button aria-label="Google Sheets settings" onClick={()=>setSheetSetupOpen(true)} title="Google Sheets settings">
-                <Settings2 size={15} />
+            <div className="apple-profile-actions">
+              <button
+                className="apple-profile-btn"
+                aria-label="Google Sheets settings"
+                onClick={() => setSheetSetupOpen(true)}
+                title="Sheets Connection"
+              >
+                <Settings2 size={14} />
               </button>
-              <button aria-label="Log out" onClick={handleLogout} title="Log out" style={{ color: '#ef4444' }}>
-                <LogOut size={15} />
+              <button
+                className="apple-profile-btn danger"
+                aria-label="Log out"
+                onClick={handleLogout}
+                title="Sign out"
+              >
+                <LogOut size={14} />
               </button>
             </div>
           </div>
@@ -677,38 +977,113 @@ function App() {
       </aside>
 
       {/* Main Content Area */}
-      <main className="main">
-        <header className="topbar">
-          <div className="breadcrumbs">
-            <span>Workspace</span>
-            <ChevronRight size={13} />
-            <b>{active}</b>
+      <div className="apple-content-stage">
+        {/* Apple Topbar Header */}
+        <header className="apple-topbar">
+          <div className="apple-topbar-left">
+            <span className="apple-breadcrumb-root">Workspace</span>
+            <ChevronRight size={13} className="apple-breadcrumb-sep" />
+            <h1 className="apple-breadcrumb-active">{active}</h1>
           </div>
-          <div className="top-actions">
-            <span className="sync-label">
+
+          <div className="apple-topbar-right">
+            {/* Live sync pill */}
+            <span className="apple-sync-pill" title={sheetsStatus?.configured ? 'Google Sheets auto-sync active' : 'Local snapshot'}>
               <span className={`live-dot ${serviceError ? 'dot-idle' : ''}`} />
-              {serviceError ? 'Service unavailable' : 'Workspace ready'}
+              <span>{serviceError ? 'Offline' : sheetsStatus?.configured ? 'Live Sync' : 'Ready'}</span>
             </span>
-            <button
-              className="icon-btn"
-              aria-label="Help & Information"
-              onClick={() =>
-                setNotice(
-                  'Pipeline: Meta Lead Ads → Google Sheets / CSV → Mailbox → ZeptoMail outreach.'
-                )
-              }
-            >
-              <HelpCircle size={17} />
-            </button>
-            <div className="header-notifications">
-              <button className="icon-btn notification" aria-label="Notifications" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen(open => !open)}>
-                <Bell size={17} />
-                {(welcomeEmailSummary.failed + welcomeEmailSummary.sending) > 0 && <i />}
+
+            {/* Notification Activity */}
+            <div className="apple-topbar-notifications">
+              <button
+                className="apple-icon-btn"
+                aria-label="Notifications"
+                aria-expanded={notificationsOpen}
+                onClick={() => setNotificationsOpen(open => !open)}
+              >
+                <Bell size={16} />
+                {(welcomeEmailSummary.failed + welcomeEmailSummary.sending) > 0 && <span className="apple-notif-dot" />}
               </button>
-              {notificationsOpen && <div className="notification-popover"><div className="notification-popover-title"><b>Email activity</b><button onClick={() => setNotificationsOpen(false)} aria-label="Close notifications"><X size={14}/></button></div><p>{welcomeEmailSummary.failed} failed · {welcomeEmailSummary.sending} in progress</p>{leads.filter(lead => lead.welcomeEmailStatus === 'failed' || lead.welcomeEmailStatus === 'bounced').slice(0, 5).map(lead => <button className="notification-item" key={lead.id} onClick={() => { setActive('Leads'); setNotificationsOpen(false); setFilter('All leads'); setQuery(lead.email); }}><span className="notification-failure-dot"/><span><b>Welcome email failed</b><small>{lead.email}</small></span><ArrowRight size={13}/></button>)}{welcomeEmailSummary.failed === 0 && <small className="notification-empty">No failed welcome emails in the loaded lead list.</small>}<button className="link-button" onClick={() => { setActive('Leads'); setNotificationsOpen(false); }}>View leads <ArrowRight size={13}/></button></div>}
+              {notificationsOpen && (
+                <div className="notification-popover">
+                  <div className="notification-popover-title">
+                    <b>Activity Center</b>
+                    <button onClick={() => setNotificationsOpen(false)} aria-label="Close notifications">
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <p>{welcomeEmailSummary.failed} failed · {welcomeEmailSummary.sending} in progress</p>
+                  {leads.filter(lead => lead.welcomeEmailStatus === 'failed' || lead.welcomeEmailStatus === 'bounced').slice(0, 5).map(lead => (
+                    <button className="notification-item" key={lead.id} onClick={() => { setActive('Leads'); setNotificationsOpen(false); setFilter('All leads'); setQuery(lead.email); }}>
+                      <span className="notification-failure-dot" />
+                      <span><b>Welcome email failed</b><small>{lead.email}</small></span>
+                      <ArrowRight size={13} />
+                    </button>
+                  ))}
+                  {welcomeEmailSummary.failed === 0 && (
+                    <small className="notification-empty">No delivery errors in the current workspace.</small>
+                  )}
+                  <button className="link-button" onClick={() => { setActive('Leads'); setNotificationsOpen(false); }}>
+                    Open lead roster <ArrowRight size={13} />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Contextual Action Blue CTAs */}
+            <div className="apple-topbar-actions">
+              {active === 'Leads' && (
+                <>
+                  <button className="button-secondary-pill" onClick={() => setModal('import')}>
+                    <CloudUpload size={14} />
+                    <span>Import CSV</span>
+                  </button>
+                  <button className="button-primary" onClick={() => openCampaign()}>
+                    <Plus size={15} />
+                    <span>New Campaign</span>
+                  </button>
+                </>
+              )}
+              {active === 'Overview' && (
+                <>
+                  <button
+                    className="button-secondary-pill"
+                    onClick={syncGoogleSheet}
+                    disabled={syncingSheet || !sheetsStatus?.configured}
+                  >
+                    <RefreshCw size={13} className={syncingSheet ? 'spin' : ''} />
+                    <span>{syncingSheet ? 'Syncing…' : 'Sync Sheet'}</span>
+                  </button>
+                  <button className="button-primary" onClick={() => openCampaign()}>
+                    <Plus size={15} />
+                    <span>New Campaign</span>
+                  </button>
+                </>
+              )}
+              {active === 'Campaigns' && (
+                <button className="button-primary" onClick={() => openCampaign()}>
+                  <Plus size={15} />
+                  <span>New Campaign</span>
+                </button>
+              )}
+              {active === 'Templates' && (
+                <button className="button-primary" onClick={() => { setEditingTemplate(null); setTemplateStudioOpen(true); }}>
+                  <Plus size={15} />
+                  <span>Create Template</span>
+                </button>
+              )}
+              {active === 'Calendar' && (
+                <button className="button-primary" onClick={() => openCampaign()}>
+                  <Plus size={15} />
+                  <span>Schedule Campaign</span>
+                </button>
+              )}
             </div>
           </div>
         </header>
+
+        {/* Main Content Body */}
+        <main className="main">
 
         {notice && (
           <div
@@ -780,14 +1155,6 @@ function App() {
                 <p>
                   All Meta Lead Ads form submissions in one place. Filter your audience and send high-converting outreach.
                 </p>
-              </div>
-              <div className="heading-actions">
-                <button className="button secondary" onClick={() => setModal('import')}>
-                  <CloudUpload size={15} /> Import leads
-                </button>
-                <button className="button primary" onClick={() => openCampaign()}>
-                  <Plus size={16} /> New campaign
-                </button>
               </div>
             </div>
 
@@ -861,6 +1228,16 @@ function App() {
                       <CloudUpload size={13} />
                       Import CSV
                     </button>
+                    {leads.length > 0 && (
+                      <button
+                        className="button ghost button-sm text-destructive sheet-action-btn"
+                        onClick={clearAllOldLeads}
+                        title="Delete old leads from this workspace to start fresh"
+                      >
+                        <Trash2 size={13} />
+                        Clear old leads
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <div className="source-actions-group">
@@ -900,7 +1277,7 @@ function App() {
 
               <div className="stat-card">
                 <div className="stat-top">
-                  <span>New {timeRange === 'all' ? 'leads' : timeRange === 'today' ? 'today' : timeRange === '7days' ? 'this week' : timeRange === '30days' ? 'this month' : timeRange === '90days' ? 'in 90 days' : 'this year'}</span>
+                  <span>New {timeRange === 'all' ? 'leads' : timeRange === 'today' ? 'today' : timeRange === '7days' ? 'this week' : timeRange === '30days' ? 'this month' : timeRange === '90days' ? 'in 90 days' : timeRange === 'custom' ? 'in custom range' : 'this year'}</span>
                   <span className="stat-icon blue">
                     <Sparkles size={15} />
                   </span>
@@ -1005,7 +1382,32 @@ function App() {
                     <option value="30days">Past 30 days</option>
                     <option value="90days">Past 90 days</option>
                     <option value="year">Year to date</option>
+                    <option value="custom">Custom date range…</option>
                   </select>
+                  {timeRange === 'custom' && (
+                    <div className="toolbar-custom-dates">
+                      <label>
+                        <span>From</span>
+                        <input
+                          type="date"
+                          value={customStartDate}
+                          onChange={e => setCustomStartDate(e.target.value)}
+                          max={customEndDate || undefined}
+                          title="Start date"
+                        />
+                      </label>
+                      <label>
+                        <span>To</span>
+                        <input
+                          type="date"
+                          value={customEndDate}
+                          onChange={e => setCustomEndDate(e.target.value)}
+                          min={customStartDate || undefined}
+                          title="End date"
+                        />
+                      </label>
+                    </div>
+                  )}
                   <button
                     type="button"
                     className="button secondary button-sm select-today-btn"
@@ -1019,13 +1421,15 @@ function App() {
                         : `Select today (${todayLeads.length})`}
                     </span>
                   </button>
-                  {(query || filter !== 'All leads' || timeRange !== 'all') && (
+                  {(query || filter !== 'All leads' || timeRange !== 'all' || customStartDate || customEndDate) && (
                     <button
                       className="filter-button"
                       onClick={() => {
                         setQuery('');
                         setFilter('All leads');
                         setTimeRange('all');
+                        setCustomStartDate('');
+                        setCustomEndDate('');
                       }}
                       title="Reset all filters"
                     >
@@ -1048,7 +1452,7 @@ function App() {
                 <div className="table-selection-banner">
                   <span>
                     <b>{selected.length}</b> lead{selected.length === 1 ? '' : 's'} selected
-                    {timeRange === 'today' ? ' (filtering today)' : ''}
+                    {timeRange === 'today' ? ' (filtering today)' : timeRange === 'custom' ? ' (custom date range)' : ''}
                   </span>
                   {selected.length < filtered.length && (
                     <button
@@ -1172,6 +1576,8 @@ function App() {
                           setQuery('');
                           setFilter('All leads');
                           setTimeRange('all');
+                          setCustomStartDate('');
+                          setCustomEndDate('');
                         }}
                       >
                         Clear filters
@@ -1348,7 +1754,67 @@ function App() {
             </div>
           </section>
         ) : active === 'Calendar' ? (
-          <section className="page"><div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-dot"/> SEND PLANNING</div><h1>Plan your sends</h1><p>Schedule a saved template for the date and time that works for your audience.</p></div><button className="button primary" onClick={()=>{setScheduleAt('');openCampaign()}}><Plus size={16}/> Schedule campaign</button></div><div className="calendar-card"><div className="calendar-toolbar"><div><h2>{calendarMonth.toLocaleDateString('en-US',{month:'long',year:'numeric'})}</h2><p>{recentCampaigns.filter(c=>c.scheduled_at&&new Date(c.scheduled_at).getMonth()===calendarMonth.getMonth()&&new Date(c.scheduled_at).getFullYear()===calendarMonth.getFullYear()).length} scheduled campaigns</p></div><div className="calendar-controls"><button className="button secondary" onClick={()=>setCalendarMonth(new Date())}>Today</button><button className="icon-button" onClick={()=>setCalendarMonth(new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()-1,1))}><ChevronLeft size={16}/></button><button className="icon-button" onClick={()=>setCalendarMonth(new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+1,1))}><ChevronRight size={16}/></button></div></div><div className="calendar-grid">{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=><div className="calendar-weekday" key={day}>{day}</div>)}{Array.from({length:(new Date(calendarMonth.getFullYear(),calendarMonth.getMonth(),1).getDay()+6)%7},(_,i)=><div className="calendar-blank" key={`blank-${i}`}/>)}{Array.from({length:new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+1,0).getDate()},(_,i)=>{const day=i+1;const date=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth(),day);const items=recentCampaigns.filter(c=>c.scheduled_at&&new Date(c.scheduled_at).toDateString()===date.toDateString());return <button className={`calendar-day ${date.toDateString()===new Date().toDateString()?'today':''}`} key={day} onClick={()=>{if(date.getTime()<=Date.now()){setNotice('Choose a future date to schedule this campaign.');return;}setScheduleAt(`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(day).padStart(2,'0')}T10:00`);openCampaign()}}><span>{day}</span>{items.map(c=><small key={c.id}><Mail size={11}/>{c.name}</small>)}</button>})}</div></div><div className="scheduled-list"><h2>Upcoming sends</h2>{recentCampaigns.filter(c=>c.scheduled_at&&new Date(c.scheduled_at)>=new Date()).sort((a,b)=>new Date(a.scheduled_at).getTime()-new Date(b.scheduled_at).getTime()).map(c=><div className="scheduled-row" key={c.id}><div className="scheduled-date"><b>{new Date(c.scheduled_at).toLocaleDateString('en-US',{day:'2-digit'})}</b><span>{new Date(c.scheduled_at).toLocaleDateString('en-US',{month:'short'})}</span></div><div><b>{c.name}</b><small>{c.subject} · {new Date(c.scheduled_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</small></div><span className="status contacted"><i/>{c.status}</span></div>)}{!recentCampaigns.some(c=>c.scheduled_at&&new Date(c.scheduled_at)>=new Date())&&<p className="no-scheduled">Nothing scheduled yet. Select a day on the calendar to plan your first send.</p>}</div></section>
+          <section className="page">
+            <div className="page-heading">
+              <div>
+                <div className="eyebrow"><span className="eyebrow-dot"/> SEND PLANNING</div>
+                <h1>Plan your sends</h1>
+                <p>Schedule a saved template for the date and time that works for your audience.</p>
+              </div>
+            </div>
+            <div className="calendar-card">
+              <div className="calendar-toolbar">
+                <div>
+                  <h2>{calendarMonth.toLocaleDateString('en-US',{month:'long',year:'numeric'})}</h2>
+                  <p>{recentCampaigns.filter(c=>c.scheduled_at&&new Date(c.scheduled_at).getMonth()===calendarMonth.getMonth()&&new Date(c.scheduled_at).getFullYear()===calendarMonth.getFullYear()).length} scheduled campaigns</p>
+                </div>
+                <div className="calendar-controls">
+                  <button className="button secondary" onClick={()=>setCalendarMonth(new Date())}>Today</button>
+                  <button className="icon-button" onClick={()=>setCalendarMonth(new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()-1,1))}><ChevronLeft size={16}/></button>
+                  <button className="icon-button" onClick={()=>setCalendarMonth(new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+1,1))}><ChevronRight size={16}/></button>
+                </div>
+              </div>
+              <div className="calendar-grid">
+                {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=><div className="calendar-weekday" key={day}>{day}</div>)}
+                {Array.from({length:(new Date(calendarMonth.getFullYear(),calendarMonth.getMonth(),1).getDay()+6)%7},(_,i)=><div className="calendar-blank" key={`blank-${i}`}/>)}
+                {Array.from({length:new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+1,0).getDate()},(_,i)=>{
+                  const day=i+1;
+                  const date=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth(),day);
+                  const items=recentCampaigns.filter(c=>c.scheduled_at&&new Date(c.scheduled_at).toDateString()===date.toDateString());
+                  return (
+                    <button className={`calendar-day ${date.toDateString()===new Date().toDateString()?'today':''}`} key={day} onClick={()=>{
+                      if(date.getTime()<=Date.now()){
+                        setNotice('Choose a future date to schedule this campaign.');
+                        return;
+                      }
+                      setScheduleAt(`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(day).padStart(2,'0')}T10:00`);
+                      openCampaign();
+                    }}>
+                      <span>{day}</span>
+                      {items.map(c=><small key={c.id}><Mail size={11}/>{c.name}</small>)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="scheduled-list">
+              <h2>Upcoming sends</h2>
+              {recentCampaigns.filter(c=>c.scheduled_at&&new Date(c.scheduled_at)>=new Date()).sort((a,b)=>new Date(a.scheduled_at).getTime()-new Date(b.scheduled_at).getTime()).map(c=>(
+                <div className="scheduled-row" key={c.id}>
+                  <div className="scheduled-date">
+                    <b>{new Date(c.scheduled_at).toLocaleDateString('en-US',{day:'2-digit'})}</b>
+                    <span>{new Date(c.scheduled_at).toLocaleDateString('en-US',{month:'short'})}</span>
+                  </div>
+                  <div>
+                    <b>{c.name}</b>
+                    <small>{c.subject} · {new Date(c.scheduled_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</small>
+                  </div>
+                  <span className="status contacted"><i/>{c.status}</span>
+                </div>
+              ))}
+              {!recentCampaigns.some(c=>c.scheduled_at&&new Date(c.scheduled_at)>=new Date())&&<p className="no-scheduled">Nothing scheduled yet. Select a day on the calendar to plan your first send.</p>}
+            </div>
+          </section>
         ) : active === 'Suppression list' ? (
           <section className="page">
             <div className="page-heading">
@@ -1370,59 +1836,280 @@ function App() {
             </div>
           </section>
         ) : active === 'Campaigns' ? (
-          <section className="page">
+          <section className="page campaigns-page">
             <div className="page-heading">
               <div>
-                <h1>Campaigns that convert</h1>
-                <p>Deliver email outreach to your leads via ZeptoMail with automatic suppression filtering.</p>
+                <h1>Campaigns</h1>
+                <p>Manage, track, and monitor outbound email campaigns.</p>
               </div>
-              <button className="button primary" onClick={() => openCampaign()}>
-                <Plus size={16} /> New campaign
-              </button>
+              <div className="heading-actions">
+                <button
+                  className="button-secondary-pill"
+                  onClick={handleRefreshCampaigns}
+                  disabled={refreshingCampaigns}
+                  title="Refresh campaign history"
+                >
+                  <RefreshCw size={13} className={refreshingCampaigns ? 'spin' : ''} />
+                  <span>Refresh</span>
+                </button>
+                <button className="button-primary" onClick={() => openCampaign()}>
+                  <Plus size={15} />
+                  <span>New Campaign</span>
+                </button>
+              </div>
             </div>
 
-            <div className="table-card campaign-list">
-              <div className="table-header">
-                <div>
-                  <h2>
-                    Recent campaigns <span className="result-count">{recentCampaigns.length}</span>
-                  </h2>
-                  <p>Queued and delivered outreach jobs.</p>
+            {/* Campaign Performance KPI Grid */}
+            <div className="stats-grid campaign-stats-grid">
+              <div className="stat-card">
+                <div className="stat-top">
+                  <span>Total Campaigns</span>
+                  <span className="stat-icon">
+                    <Send size={14} />
+                  </span>
+                </div>
+                <div className="stat-value">{campaignStats.totalCampaigns}</div>
+                <div className="stat-foot">
+                  <span>{campaignStats.completedCount} delivered · {campaignStats.scheduledCount} scheduled</span>
                 </div>
               </div>
+
+              <div className="stat-card">
+                <div className="stat-top">
+                  <span>Emails Sent</span>
+                  <span className="stat-icon">
+                    <Mail size={14} />
+                  </span>
+                </div>
+                <div className="stat-value">{campaignStats.totalSent.toLocaleString()}</div>
+                <div className="stat-foot">
+                  <span>{campaignStats.totalRecipients.toLocaleString()} total recipients</span>
+                </div>
+              </div>
+
+              <div className="stat-card">
+                <div className="stat-top">
+                  <span>Delivery Rate</span>
+                  <span className="stat-icon">
+                    <CheckCircle2 size={14} />
+                  </span>
+                </div>
+                <div className="stat-value">{campaignStats.deliveryRate}%</div>
+                <div className="stat-foot">
+                  <span>{campaignStats.failedCount > 0 ? `${campaignStats.failedCount} failed sends` : '100% deliverability'}</span>
+                </div>
+              </div>
+
+              <div className="stat-card">
+                <div className="stat-top">
+                  <span>Scheduled</span>
+                  <span className="stat-icon">
+                    <Clock size={14} />
+                  </span>
+                </div>
+                <div className="stat-value">{campaignStats.scheduledCount}</div>
+                <div className="stat-foot">
+                  <span>{campaignStats.scheduledCount === 1 ? '1 upcoming campaign' : `${campaignStats.scheduledCount} upcoming campaigns`}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Main Table Card */}
+            <div className="table-card campaign-list-card">
+              <div className="campaign-toolbar">
+                <div className="campaign-toolbar-left">
+                  <div className="searchbox campaign-search">
+                    <Search size={14} />
+                    <input
+                      type="text"
+                      placeholder="Search campaigns..."
+                      value={campaignSearchQuery}
+                      onChange={e => setCampaignSearchQuery(e.target.value)}
+                    />
+                    {campaignSearchQuery && (
+                      <button
+                        className="clear-search-btn"
+                        onClick={() => setCampaignSearchQuery('')}
+                        aria-label="Clear search"
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="campaign-filter-tabs">
+                    <button
+                      className={`campaign-tab ${campaignStatusFilter === 'all' ? 'active' : ''}`}
+                      onClick={() => setCampaignStatusFilter('all')}
+                    >
+                      All <span className="tab-badge">{recentCampaigns.length}</span>
+                    </button>
+                    <button
+                      className={`campaign-tab ${campaignStatusFilter === 'completed' ? 'active' : ''}`}
+                      onClick={() => setCampaignStatusFilter('completed')}
+                    >
+                      Delivered <span className="tab-badge">{campaignStats.completedCount}</span>
+                    </button>
+                    <button
+                      className={`campaign-tab ${campaignStatusFilter === 'scheduled' ? 'active' : ''}`}
+                      onClick={() => setCampaignStatusFilter('scheduled')}
+                    >
+                      Scheduled <span className="tab-badge">{campaignStats.scheduledCount}</span>
+                    </button>
+                    {(campaignStats.sendingCount > 0 || campaignStatusFilter === 'sending') && (
+                      <button
+                        className={`campaign-tab ${campaignStatusFilter === 'sending' ? 'active' : ''}`}
+                        onClick={() => setCampaignStatusFilter('sending')}
+                      >
+                        Sending <span className="tab-badge">{campaignStats.sendingCount}</span>
+                      </button>
+                    )}
+                    {(campaignStats.failedCount > 0 || campaignStatusFilter === 'failed') && (
+                      <button
+                        className={`campaign-tab ${campaignStatusFilter === 'failed' ? 'active' : ''}`}
+                        onClick={() => setCampaignStatusFilter('failed')}
+                      >
+                        Failed <span className="tab-badge">{campaignStats.failedCount}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="campaign-toolbar-right">
+                  {(campaignSearchQuery || campaignStatusFilter !== 'all') && (
+                    <button
+                      className="reset-filters-link"
+                      onClick={() => {
+                        setCampaignSearchQuery('');
+                        setCampaignStatusFilter('all');
+                      }}
+                    >
+                      Reset filters
+                    </button>
+                  )}
+                  <span className="campaign-count-indicator">
+                    Showing <b>{filteredCampaigns.length}</b> of {recentCampaigns.length}
+                  </span>
+                </div>
+              </div>
+
               <div className="table-wrap">
-                <table>
+                <table className="campaign-modern-table">
                   <thead>
                     <tr>
-                      <th>CAMPAIGN</th>
-                      <th>SUBJECT</th>
-                      <th>STATUS</th>
-                      <th>RECIPIENTS</th>
-                      <th>SENT</th>
+                      <th style={{ width: '44%' }}>CAMPAIGN</th>
+                      <th style={{ width: '16%' }}>AUDIENCE</th>
+                      <th style={{ width: '16%' }}>STATUS</th>
+                      <th style={{ width: '16%' }}>DATE</th>
+                      <th style={{ width: '8%', textAlign: 'right' }}>ACTION</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {recentCampaigns.map(c => (
-                      <tr key={c.id}>
-                        <td><b>{c.name}</b></td>
-                        <td>{c.subject}</td>
-                        <td>
-                          <span className="status contacted">
-                            <i />
-                            {c.status}
-                          </span>
-                        </td>
-                        <td>{c.recipient_count}</td>
-                        <td>{c.sent_count}</td>
-                      </tr>
-                    ))}
+                    {filteredCampaigns.map(c => {
+                      const dateDisplay = c.scheduled_at ? c.scheduled_at : c.created_at;
+                      const matchedTemplate = c.template_id ? templates.find(t => t.id === c.template_id) : null;
+
+                      return (
+                        <tr
+                          key={c.id}
+                          className="campaign-row"
+                          onClick={() => handleInspectCampaign(c)}
+                        >
+                          {/* Campaign Name & Subject preview */}
+                          <td>
+                            <div className="campaign-primary-cell">
+                              <div className="campaign-title-row">
+                                <span className="campaign-name">{c.name}</span>
+                                {matchedTemplate && (
+                                  <span className="campaign-template-pill" title={`Template: ${matchedTemplate.name}`}>
+                                    {matchedTemplate.name}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="campaign-subject-preview" title={c.subject}>
+                                {c.subject || 'No subject'}
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Audience */}
+                          <td>
+                            <span className="campaign-audience-text">
+                              {c.recipient_count} {c.recipient_count === 1 ? 'lead' : 'leads'}
+                            </span>
+                          </td>
+
+                          {/* Status */}
+                          <td>
+                            <span className={`apple-status-badge ${c.status}`}>
+                              <span className="status-dot" />
+                              {c.status === 'completed'
+                                ? 'Delivered'
+                                : c.status === 'scheduled'
+                                ? 'Scheduled'
+                                : c.status === 'sending'
+                                ? 'Sending'
+                                : c.status === 'failed'
+                                ? 'Failed'
+                                : c.status}
+                            </span>
+                          </td>
+
+                          {/* Date */}
+                          <td>
+                            <span className="campaign-date-text">
+                              {formatCampaignDate(dateDisplay)}
+                            </span>
+                          </td>
+
+                          {/* Quick Action */}
+                          <td style={{ textAlign: 'right' }}>
+                            <div className="campaign-row-actions" onClick={e => e.stopPropagation()}>
+                              <button
+                                className="campaign-view-button"
+                                title="View campaign details"
+                                onClick={() => handleInspectCampaign(c)}
+                              >
+                                View
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
+
+                {/* Empty State when no campaigns exist */}
                 {!recentCampaigns.length && (
-                  <div className="empty-state">
-                    <p>No campaigns have been created yet</p>
+                  <div className="campaign-empty-banner">
+                    <div className="empty-icon-circle">
+                      <Send size={24} />
+                    </div>
+                    <h3>No campaigns created yet</h3>
+                    <p>Create your first campaign to send targeted email outreach to your Meta leads via ZeptoMail.</p>
                     <button className="button primary button-sm" onClick={() => openCampaign()}>
-                      <Plus size={13} /> Create your first campaign
+                      <Plus size={14} /> Create your first campaign
+                    </button>
+                  </div>
+                )}
+
+                {/* Empty State when filters yield no results */}
+                {recentCampaigns.length > 0 && !filteredCampaigns.length && (
+                  <div className="campaign-empty-banner">
+                    <div className="empty-icon-circle">
+                      <Search size={22} />
+                    </div>
+                    <h3>No matching campaigns found</h3>
+                    <p>Try adjusting your search terms or status filter to see other campaigns.</p>
+                    <button
+                      className="button secondary button-sm"
+                      onClick={() => {
+                        setCampaignSearchQuery('');
+                        setCampaignStatusFilter('all');
+                      }}
+                    >
+                      Clear all filters
                     </button>
                   </div>
                 )}
@@ -1430,211 +2117,437 @@ function App() {
             </div>
           </section>
         ) : (
-          /* Overview View */
-          <section className="page">
-            <div className="page-heading">
-              <div>
-                <h1>{getGreeting()}, welcome back</h1>
-                <p>Your Meta leads and email outreach are synced and ready for action.</p>
+          /* Redesigned Impeccable Overview Hub */
+          <section className="page overview-hub-page">
+            {/* Apple Near-Black Hero Tile 1 (#272729) */}
+            <div className="overview-hero-tile-dark">
+              <div className="hero-tile-content">
+                <span className="hero-tile-eyebrow">Executive Pipeline</span>
+                <h1 className="hero-tile-title">{getGreeting()}, {currentUser?.name?.split(' ')[0] || 'Leader'}</h1>
+                <p className="hero-tile-body">
+                  <span>{stats.totalLeads} synced leads across your campaigns</span>
+                  <span className="hero-bullet">·</span>
+                  <span>{sheetsStatus?.configured ? 'Google Sheets live sync active' : 'Awaiting sheet connection'}</span>
+                  <span className="hero-bullet">·</span>
+                  <span>{stats.newLeads} leads awaiting first-touch outreach</span>
+                </p>
+                <div className="hero-tile-actions">
+                  <button
+                    className="button-primary"
+                    onClick={() => openCampaign()}
+                  >
+                    <Plus size={15} />
+                    <span>New Campaign</span>
+                  </button>
+                  <button
+                    className="hero-link-btn"
+                    onClick={() => { setActive('Leads'); setFilter('New'); }}
+                  >
+                    <span>View uncontacted leads</span>
+                    <ArrowRight size={14} />
+                  </button>
+                  <button
+                    className="hero-link-btn"
+                    onClick={syncGoogleSheet}
+                    disabled={syncingSheet || !sheetsStatus?.configured}
+                  >
+                    <RefreshCw size={13} className={syncingSheet ? 'spin' : ''} />
+                    <span>{syncingSheet ? 'Syncing…' : 'Sync Google Sheet'}</span>
+                  </button>
+                </div>
               </div>
-              <button className="button primary" onClick={() => openCampaign()}>
-                <Plus size={16} /> New campaign
-              </button>
             </div>
 
-            <div className="overview-layout">
-              <div className="overview-main">
-                <div className="stats-grid">
-                  <div className="stat-card">
-                    <div className="stat-top">
-                      <span>Total leads</span>
-                      <span className="stat-icon mint">
-                        <Users size={16} />
-                      </span>
+            {/* 4 Executive KPI Performance Tiles */}
+            <div className="overview-kpi-grid">
+              {/* Tile 1: Total Volume */}
+              <div className="kpi-panel" onClick={() => { setActive('Leads'); setFilter('All leads'); }}>
+                <div className="kpi-panel-top">
+                  <span className="kpi-label">Total Leads</span>
+                  <span className="kpi-icon mint">
+                    <Users size={16} />
+                  </span>
+                </div>
+                <div className="kpi-number">{stats.totalLeads.toLocaleString()}</div>
+                <div className="kpi-footer">
+                  <span className="kpi-badge mint">
+                    +{newThisWeek} this week
+                  </span>
+                  <span className="kpi-subtext">Active contacts</span>
+                </div>
+              </div>
+
+              {/* Tile 2: Contacted / Conversion Velocity */}
+              <div className="kpi-panel" onClick={() => { setActive('Leads'); setFilter('Contacted'); }}>
+                <div className="kpi-panel-top">
+                  <span className="kpi-label">Outreach Reach</span>
+                  <span className="kpi-icon blue">
+                    <Send size={15} />
+                  </span>
+                </div>
+                <div className="kpi-number">{stats.contactedLeads.toLocaleString()}</div>
+                <div className="kpi-footer">
+                  <span className="kpi-badge blue">
+                    {conversionRate}% reached
+                  </span>
+                  <span className="kpi-subtext">of total leads</span>
+                </div>
+              </div>
+
+              {/* Tile 3: Ready to Reach (New Leads) */}
+              <div className="kpi-panel" onClick={() => { setActive('Leads'); setFilter('New'); }}>
+                <div className="kpi-panel-top">
+                  <span className="kpi-label">Ready to Convert</span>
+                  <span className="kpi-icon gold">
+                    <Sparkles size={15} />
+                  </span>
+                </div>
+                <div className="kpi-number">{stats.newLeads.toLocaleString()}</div>
+                <div className="kpi-footer">
+                  <span className="kpi-badge gold">
+                    {stats.newLeads > 0 ? 'Action required' : 'All caught up'}
+                  </span>
+                  <span className="kpi-subtext">Awaiting outreach</span>
+                </div>
+              </div>
+
+              {/* Tile 4: Automated Welcome Engine */}
+              <div className="kpi-panel" onClick={() => setActive('Templates')}>
+                <div className="kpi-panel-top">
+                  <span className="kpi-label">Welcome Automation</span>
+                  <span className="kpi-icon violet">
+                    <MailCheck size={16} />
+                  </span>
+                </div>
+                <div className="kpi-number">{welcomeEmailSummary.sent.toLocaleString()}</div>
+                <div className="kpi-footer">
+                  <span className={`kpi-badge ${welcomeTemplate ? 'mint' : 'muted'}`}>
+                    {welcomeTemplate ? 'Active' : 'Off'}
+                  </span>
+                  <span className="kpi-subtext" title={welcomeTemplate ? welcomeTemplate.name : 'Configure automatic send'}>
+                    {welcomeTemplate ? welcomeTemplate.name.slice(0, 16) : 'Not configured'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Main Interactive Grid: Intake Chart & Priority Pipeline vs Operational Hub */}
+            <div className="overview-cockpit-layout">
+              {/* Left Column: Intake Visualizer & Priority Pipeline */}
+              <div className="overview-cockpit-left">
+                {/* 7-Day Lead Ingestion Chart */}
+                <div className="cockpit-card lead-velocity-card">
+                  <div className="cockpit-card-header">
+                    <div>
+                      <h2>Lead Intake Velocity</h2>
+                      <p>Trailing 7-day volume from Meta Lead Ads campaigns</p>
                     </div>
-                    <div className="stat-value">{stats.totalLeads.toLocaleString()}</div>
-                    <div className="stat-foot">
-                      <span className="stat-dot mint-dot" />
-                      <span>Synchronized contacts</span>
+                    <div className="intake-metric-pill">
+                      <TrendingUp size={13} />
+                      <span><b>{newThisWeek}</b> leads in past 7 days</span>
                     </div>
                   </div>
 
-                  <div className="stat-card">
-                    <div className="stat-top">
-                      <span>New this week</span>
-                      <span className="stat-icon blue">
-                        <Sparkles size={16} />
-                      </span>
-                    </div>
-                    <div className="stat-value">{newThisWeek.toLocaleString()}</div>
-                    <div className="stat-foot">
-                      <span className="stat-dot blue-dot" />
-                      <span>Added in past 7 days</span>
-                    </div>
-                  </div>
-
-                  <div className="stat-card">
-                    <div className="stat-top">
-                      <span>Ready to reach</span>
-                      <span className="stat-icon gold">
-                        <Send size={16} />
-                      </span>
-                    </div>
-                    <div className="stat-value">{stats.newLeads.toLocaleString()}</div>
-                    <div className="stat-foot">
-                      <span className="stat-dot gold-dot" />
-                      <span>Current lead status: new</span>
+                  <div className="intake-chart-container">
+                    <div className="intake-bars-track">
+                      {activityDays.map((item, i) => {
+                        const isMax = item.count > 0 && item.count === Math.max(...activityDays.map(x => x.count));
+                        return (
+                          <div key={i} className="intake-day-column" title={`${item.label}: ${item.count} leads`}>
+                            {item.count > 0 ? (
+                              <span className={`intake-day-count ${isMax ? 'peak' : ''}`}>
+                                {item.count}
+                              </span>
+                            ) : (
+                              <span className="intake-day-count" style={{ opacity: 0 }}>0</span>
+                            )}
+                            <div className="intake-bar-wrapper">
+                              <div
+                                className={`intake-bar-fill ${isMax ? 'peak-fill' : ''}`}
+                                style={{ height: `${Math.max(item.height, item.count > 0 ? 18 : 6)}%` }}
+                              />
+                            </div>
+                            <span className="intake-day-label">{item.label}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
 
-                <div className="chart-card">
-                  <div className="chart-card-head">
+                {/* Priority Outreach Leads Stream */}
+                <div className="cockpit-card priority-leads-card">
+                  <div className="cockpit-card-header">
                     <div>
-                      <h2>Lead activity</h2>
-                      <p>Submissions over the trailing 7 days</p>
+                      <h2>Priority Leads to Contact</h2>
+                      <p>Prospects ready for follow-up and appointment booking</p>
                     </div>
-                    <div className="chart-badge">
-                      <Users size={13} />
-                      <span>{newThisWeek} new this week</span>
+                    <div className="cockpit-tab-pills">
+                      <button
+                        className={`cockpit-tab ${overviewLeadFilter === 'uncontacted' ? 'active' : ''}`}
+                        onClick={() => setOverviewLeadFilter('uncontacted')}
+                      >
+                        Uncontacted ({stats.newLeads})
+                      </button>
+                      <button
+                        className={`cockpit-tab ${overviewLeadFilter === 'all' ? 'active' : ''}`}
+                        onClick={() => setOverviewLeadFilter('all')}
+                      >
+                        Recent All ({leads.length})
+                      </button>
                     </div>
                   </div>
-                  <div className="chart">
-                    <div className="chart-grid">
-                      <span>Max</span>
-                      <span>Mid</span>
-                      <span>0</span>
+
+                  <div className="priority-leads-list">
+                    {overviewFilteredLeads.slice(0, 6).map(l => {
+                      const isUncontacted = l.status === 'new';
+                      const initialLetters = l.name.split(' ').map(s => s[0]).join('').slice(0, 2).toUpperCase() || 'L';
+                      return (
+                        <div key={l.id} className="priority-lead-row">
+                          <div className="priority-avatar">
+                            {initialLetters}
+                          </div>
+                          <div className="priority-lead-info">
+                            <div className="priority-name-line">
+                              <span className="priority-name">{l.name}</span>
+                              <span className={`status ${statusClass(l.status)}`}>
+                                <i /> {l.status}
+                              </span>
+                              {l.welcomeEmailStatus && (
+                                <span className={`welcome-pill-small ${l.welcomeEmailStatus}`}>
+                                  <MailCheck size={10} /> {l.welcomeEmailStatus}
+                                </span>
+                              )}
+                            </div>
+                            <div className="priority-meta-line">
+                              <span>{l.email}</span>
+                              {l.company && (
+                                <>
+                                  <span className="lead-meta-dot">·</span>
+                                  <span>{l.company}</span>
+                                </>
+                              )}
+                              {l.campaign && (
+                                <>
+                                  <span className="lead-meta-dot">·</span>
+                                  <span className="lead-campaign-tag">{l.campaign}</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="priority-lead-actions">
+                            <button
+                              className="action-btn-quick-email"
+                              onClick={() => {
+                                setSelected([l.id]);
+                                openCampaign('selected');
+                              }}
+                              title="Send personalized campaign to this lead"
+                            >
+                              <Send size={12} />
+                              <span>Outreach</span>
+                            </button>
+                            {isUncontacted && (
+                              <button
+                                className="action-btn-mark-contacted"
+                                onClick={() => void updateLeadStatus(l)}
+                                title="Mark status as contacted"
+                              >
+                                <Check size={13} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {!overviewFilteredLeads.length && (
+                      <div className="priority-empty-state">
+                        <CheckCircle2 size={24} style={{ color: 'var(--color-primary)' }} />
+                        <b>All caught up</b>
+                        <p>No uncontacted leads waiting. Every lead has been reached.</p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="cockpit-card-footer">
+                    <span>Showing priority leads from your Meta sync</span>
+                    <button className="link-button" onClick={() => setActive('Leads')}>
+                      View full lead directory ({leads.length}) <ArrowRight size={13} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Column: Operational Infrastructure & Engine */}
+              <div className="overview-cockpit-right">
+                {/* Google Sheets Sync Station */}
+                <div className="cockpit-card integration-pulse-card">
+                  <div className="integration-pulse-header">
+                    <div className="integration-title-cluster">
+                      <div className="integration-icon-badge">
+                        <FileSpreadsheet size={18} />
+                      </div>
+                      <div>
+                        <h3>Google Sheets</h3>
+                        <p>Meta Lead Ads live sync gateway</p>
+                      </div>
                     </div>
-                    <div className="bars">
-                      {activityDays.map((item, i) => (
-                        <div key={i} className="bar-group" title={`${item.label}: ${item.count} leads`}>
-                          {item.count > 0 && <span className="bar-count-badge">{item.count}</span>}
-                          <div style={{ height: `${item.height}%` }} />
-                          <small>{item.label}</small>
+                    <span className={`pulse-badge ${sheetsStatus?.configured ? 'connected' : 'setup-needed'}`}>
+                      <i className="pulse-status-dot" /> {sheetsStatus?.configured ? 'Active' : 'Not configured'}
+                    </span>
+                  </div>
+
+                  <div className="integration-pulse-body">
+                    {sheetsStatus?.configured ? (
+                      <>
+                        <div className="integration-metrics-card">
+                          <div className="pulse-metric-row">
+                            <span className="metric-label">Target Sheet</span>
+                            <b className="metric-value font-mono" title={sheetsStatus.spreadsheetId || ''}>
+                              {sheetsStatus.spreadsheetId ? `${sheetsStatus.spreadsheetId.slice(0, 16)}...` : 'Connected'}
+                            </b>
+                          </div>
+                          <div className="pulse-metric-row">
+                            <span className="metric-label">Sheet Range</span>
+                            <b className="metric-value font-mono">{sheetsStatus.range || 'Leads!A1:Z5000'}</b>
+                          </div>
+                          <div className="pulse-metric-row">
+                            <span className="metric-label">Last Synced</span>
+                            <b className="metric-value">{sheetsStatus.lastSyncedAt ? formatRelativeTime(sheetsStatus.lastSyncedAt) : 'Starting…'}</b>
+                          </div>
+                          <div className="pulse-metric-row">
+                            <span className="metric-label">Auto-Sync</span>
+                            <b className="metric-value">Every {sheetsStatus.intervalMinutes || 5} min</b>
+                          </div>
+                        </div>
+
+                        <div className="pulse-actions-row">
+                          <button
+                            className="button primary button-sm"
+                            disabled={syncingSheet}
+                            onClick={syncGoogleSheet}
+                          >
+                            <RefreshCw size={12} className={syncingSheet ? 'spin' : ''} />
+                            {syncingSheet ? 'Syncing…' : 'Sync now'}
+                          </button>
+                          <button
+                            className="button secondary button-sm"
+                            onClick={() => setSheetSetupOpen(true)}
+                          >
+                            <Settings2 size={12} />
+                            Manage
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="integration-setup-pitch">
+                        <div className="integration-pitch-icon-row">
+                          <div className="pitch-service-pill">
+                            <span className="meta-brand-tag">Meta Ads</span>
+                            <ArrowRight size={12} className="pitch-arrow" />
+                            <span className="gsheet-brand-tag">Google Sheets</span>
+                            <ArrowRight size={12} className="pitch-arrow" />
+                            <span className="mailbox-brand-tag">Mailbox</span>
+                          </div>
+                        </div>
+                        <p className="pitch-description">
+                          Link your Meta Lead Ads spreadsheet to automatically ingest and dispatch incoming leads every 5 minutes.
+                        </p>
+                        <div className="pitch-action-row">
+                          <button
+                            className="button primary button-sm connect-sheet-trigger"
+                            onClick={() => setSheetSetupOpen(true)}
+                          >
+                            <FileSpreadsheet size={14} /> Connect Google Sheet
+                            <ArrowRight size={13} />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Welcome Email Engine Card */}
+                <div className="cockpit-card welcome-engine-card">
+                  <div className="welcome-engine-header">
+                    <div className="engine-icon-badge">
+                      <MailCheck size={18} />
+                    </div>
+                    <div>
+                      <h3>Instant Welcome Email</h3>
+                      <p>Automatic first-touch outreach to new leads</p>
+                    </div>
+                    <span className={`engine-status-badge ${welcomeTemplate ? 'enabled' : 'disabled'}`}>
+                      {welcomeTemplate ? 'Active' : 'Off'}
+                    </span>
+                  </div>
+
+                  <div className="welcome-engine-body">
+                    <div className="welcome-template-snippet">
+                      <div className="snippet-head">
+                        <span className="snippet-tag">Active Template</span>
+                        <b>{welcomeTemplate ? welcomeTemplate.name : 'No automatic template selected'}</b>
+                      </div>
+                      <p className="snippet-subject">
+                        {welcomeTemplate
+                          ? `Subject: "${welcomeTemplate.subject || 'Welcome to our service'}"`
+                          : 'New leads will not receive an automatic introductory email until configured.'}
+                      </p>
+                    </div>
+
+                    <div className="welcome-stats-strip">
+                      <div className="stat-pill-box">
+                        <span className="stat-num">{welcomeEmailSummary.sent}</span>
+                        <span className="stat-lbl">Delivered</span>
+                      </div>
+                      <div className="stat-pill-box">
+                        <span className="stat-num">{welcomeEmailSummary.sending}</span>
+                        <span className="stat-lbl">In Progress</span>
+                      </div>
+                      <div className="stat-pill-box">
+                        <span className="stat-num">{welcomeEmailSummary.failed}</span>
+                        <span className="stat-lbl">Failed</span>
+                      </div>
+                    </div>
+
+                    <div className="welcome-footer-action">
+                      <button
+                        className="button secondary button-sm welcome-config-btn"
+                        onClick={() => setActive('Templates')}
+                      >
+                        {welcomeTemplate ? 'Change template' : 'Configure welcome email'}
+                        <ArrowRight size={13} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Lead Sources Distribution Card */}
+                {leadSourceBreakdown.length > 0 && (
+                  <div className="cockpit-card sources-breakdown-card">
+                    <div className="sources-header">
+                      <div>
+                        <h3>Lead Sources</h3>
+                        <p>{leadSourceBreakdown.length} active Meta forms</p>
+                      </div>
+                    </div>
+                    <div className="sources-list">
+                      {leadSourceBreakdown.map((src, i) => (
+                        <div key={i} className="source-breakdown-row">
+                          <div className="source-info-row">
+                            <span className="source-name" title={src.name}>{src.name}</span>
+                            <span className="source-count">{src.count} <span className="source-pct">({src.pct}%)</span></span>
+                          </div>
+                          <div className="source-track">
+                            <div className="source-fill" style={{ width: `${src.pct}%` }} />
+                          </div>
                         </div>
                       ))}
                     </div>
                   </div>
-                </div>
-              </div>
-
-              <aside className="overview-aside">
-                {welcomeSummaryPanel}
-                <div className="source-card">
-                  <div className="source-card-head">
-                    <div className="source-icon">
-                      <FileSpreadsheet size={16} />
-                    </div>
-                    <span className="connected-pill">
-                      <i /> {serviceError ? 'Offline' : 'Workspace configured'}
-                    </span>
-                  </div>
-                  <h3>Lead Source</h3>
-                  <p>Meta Lead Ads → Google Sheets / CSV → Mailbox</p>
-                  <div className="source-detail"><span>Sheet sync</span><b>{sheetsStatus?.configured?(sheetsStatus.lastSyncedAt?new Date(sheetsStatus.lastSyncedAt).toLocaleString():'Starting…'):'Setup needed'}</b></div>
-                  <div className="source-detail">
-                    <span>Workspace Leads</span>
-                    <b>{stats.totalLeads}</b>
-                  </div>
-                  {sheetsStatus?.configured?<button className="text-action" disabled={syncingSheet} onClick={syncGoogleSheet}><RefreshCw size={13} className={syncingSheet?'spin':''}/>{syncingSheet?'Syncing sheet…':'Sync sheet now'} <ArrowRight size={13}/></button>:<button className="text-action" onClick={() => setModal('import')}>Import CSV leads <ArrowRight size={13}/></button>}
-                </div>
-
-                <div className="tip-card">
-                  <div className="tip-card-top">
-                    <Sparkles size={15} />
-                    <b>Quick Outreach Tip</b>
-                  </div>
-                  <p>
-                    Reaching Meta leads within the first 24 hours increases conversion rates by up to 391%.
-                  </p>
-                  <button
-                    onClick={() => {
-                      setActive('Leads');
-                      setFilter('New');
-                    }}
-                  >
-                    View new leads <ArrowRight size={13} />
-                  </button>
-                </div>
-              </aside>
-            </div>
-
-            <div className="table-card overview-table">
-              <div className="table-header">
-                <div>
-                  <h2>
-                    Latest leads <span className="result-count">{Math.min(leads.length, 5)}</span>
-                  </h2>
-                  <p>Most recent submissions from Meta Lead Ads.</p>
-                </div>
-                <button className="link-button" onClick={() => setActive('Leads')}>
-                  View all leads <ArrowRight size={13} />
-                </button>
-              </div>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>LEAD</th>
-                      <th>COMPANY</th>
-                      <th>CAMPAIGN</th>
-                      <th>STATUS</th>
-                      <th>ADDED</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {leads.slice(0, 5).map(l => (
-                      <tr key={l.id}>
-                        <td>
-                          <div className="lead-cell">
-                            <div
-                              className={`lead-avatar avatar-${
-                                l.name.charCodeAt(0) % 5
-                              }`}
-                            >
-                              {l.name
-                                .split(' ')
-                                .map(s => s[0])
-                                .join('')
-                                .slice(0, 2)
-                                .toUpperCase()}
-                            </div>
-                            <div>
-                              <b>{l.name}</b>
-                              <span>{l.email}</span>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="company-cell">{l.company || '—'}</td>
-                        <td className="campaign-cell">{l.campaign || '—'}</td>
-                        <td>
-                          <span className={`status ${statusClass(l.status)}`}>
-                            <i />
-                            {l.status.charAt(0).toUpperCase() + l.status.slice(1)}
-                          </span>
-                        </td>
-                        <td className="date-cell">{l.date}</td>
-                      </tr>
-                    ))}
-                    {leads.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="empty-table-cell">
-                          <div className="empty-table-state">
-                            <FileSpreadsheet size={22} className="empty-icon" />
-                            <p>No leads in this workspace yet</p>
-                            <small>Import your Meta Lead Ads CSV to start connecting with prospects</small>
-                            <button
-                              className="button secondary button-sm"
-                              onClick={() => setModal('import')}
-                            >
-                              <CloudUpload size={13} /> Import leads
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                )}
               </div>
             </div>
           </section>
@@ -1654,6 +2567,7 @@ function App() {
           </a>
         </footer>
       </main>
+      </div>
 
       {/* Floating Selection Bar */}
       {selected.length > 0 && (
@@ -1665,12 +2579,144 @@ function App() {
             <Send size={14} /> Email selected leads <ArrowRight size={13} />
           </button>
           <button
+            className="selection-delete-btn"
+            onClick={deleteSelectedLeads}
+            title="Delete selected leads"
+          >
+            <Trash2 size={13} /> Delete selected
+          </button>
+          <button
             className="selection-close"
             onClick={() => setSelected([])}
             aria-label="Clear selection"
           >
             <X size={14} />
           </button>
+        </div>
+      )}
+
+      {/* Campaign Details Inspector Modal */}
+      {selectedCampaignDetail && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={e => {
+            if (e.target === e.currentTarget) setSelectedCampaignDetail(null);
+          }}
+        >
+          <div className="modal campaign-detail-modal">
+            <div className="modal-head">
+              <div>
+                <span className={`modal-icon ${selectedCampaignDetail.status === 'completed' ? 'mint' : selectedCampaignDetail.status === 'scheduled' ? 'blue' : 'amber'}`}>
+                  {selectedCampaignDetail.status === 'scheduled' ? <CalendarDays size={18} /> : <Send size={18} />}
+                </span>
+                <h2>{selectedCampaignDetail.name}</h2>
+                <p>Outreach Job · <code className="campaign-id-code">{selectedCampaignDetail.id.slice(0, 8)}...</code></p>
+              </div>
+              <button
+                className="close-modal"
+                onClick={() => setSelectedCampaignDetail(null)}
+                aria-label="Close dialog"
+              >
+                <X size={17} />
+              </button>
+            </div>
+
+            <div className="campaign-detail-body">
+              {/* Top Quick Status Pill */}
+              <div className="campaign-detail-status-strip">
+                <span className={`campaign-status-pill ${selectedCampaignDetail.status}`}>
+                  <i /> {selectedCampaignDetail.status === 'completed' ? 'Delivered' : selectedCampaignDetail.status === 'scheduled' ? 'Scheduled Send' : selectedCampaignDetail.status}
+                </span>
+                <span className="campaign-detail-timestamp">
+                  <Clock size={12} /> {selectedCampaignDetail.scheduled_at ? `Scheduled for ${formatCampaignDate(selectedCampaignDetail.scheduled_at)}` : `Sent on ${formatCampaignDate(selectedCampaignDetail.created_at)}`}
+                </span>
+              </div>
+
+              {/* 4 Stat Metric Tiles */}
+              <div className="campaign-detail-stats">
+                <div className="detail-stat-tile">
+                  <span>Recipients</span>
+                  <b>{selectedCampaignDetail.recipient_count}</b>
+                  <small>Targeted leads</small>
+                </div>
+                <div className="detail-stat-tile">
+                  <span>Delivered</span>
+                  <b>{selectedCampaignDetail.sent_count}</b>
+                  <small>Outreach emails</small>
+                </div>
+                <div className="detail-stat-tile">
+                  <span>Completion</span>
+                  <b>{selectedCampaignDetail.recipient_count > 0 ? `${Math.round((selectedCampaignDetail.sent_count / selectedCampaignDetail.recipient_count) * 100)}%` : '100%'}</b>
+                  <small>ZeptoMail verified</small>
+                </div>
+                <div className="detail-stat-tile">
+                  <span>Suppression</span>
+                  <b>Safe</b>
+                  <small>Auto protected</small>
+                </div>
+              </div>
+
+              {/* Subject box */}
+              <div className="campaign-detail-section">
+                <label>EMAIL SUBJECT</label>
+                <div className="campaign-subject-box">
+                  <span>{selectedCampaignDetail.subject || 'No subject provided'}</span>
+                  {selectedCampaignDetail.subject && (
+                    <button
+                      className="button secondary button-sm"
+                      onClick={e => handleCopySubject(selectedCampaignDetail.subject, e)}
+                    >
+                      <Copy size={12} /> Copy
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Delivery Pipeline Intelligence */}
+              <div className="campaign-detail-section">
+                <label>DELIVERY CONFIGURATION</label>
+                <div className="campaign-config-card">
+                  <div className="config-row">
+                    <span>Dispatch Service</span>
+                    <b>ZeptoMail Transactional API</b>
+                  </div>
+                  <div className="config-row">
+                    <span>Suppression Check</span>
+                    <b className="text-mint"><CheckCircle2 size={12} /> Filtered &amp; Protected</b>
+                  </div>
+                  {selectedCampaignDetail.scheduled_at && (
+                    <div className="config-row">
+                      <span>Scheduled Send Time</span>
+                      <b>{formatCampaignDate(selectedCampaignDetail.scheduled_at)}</b>
+                    </div>
+                  )}
+                  <div className="config-row">
+                    <span>Created Timestamp</span>
+                    <b>{formatCampaignDate(selectedCampaignDetail.created_at)}</b>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                className="button secondary"
+                onClick={() => setSelectedCampaignDetail(null)}
+              >
+                Close
+              </button>
+              <button
+                className="button primary"
+                onClick={() => {
+                  const c = selectedCampaignDetail;
+                  setSelectedCampaignDetail(null);
+                  handleDuplicateCampaign(c);
+                }}
+              >
+                <Copy size={14} /> Duplicate as new campaign
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1682,57 +2728,71 @@ function App() {
             if (e.target === e.currentTarget) setModal(null);
           }}
         >
-          <div className="modal">
+          <div className="modal campaign-modal">
             <div className="modal-head">
-              <div>
+              <div className="modal-title-cluster">
                 <span className="modal-icon">
-                  {modal === 'import' ? <FileSpreadsheet size={17} /> : <Send size={17} />}
+                  {modal === 'import' ? <FileSpreadsheet size={18} /> : <Send size={18} />}
                 </span>
-                <h2>{modal === 'import' ? 'Import your leads' : 'Create an email campaign'}</h2>
-                <p>
-                  {modal === 'import'
-                    ? 'Upload Meta Lead Ads CSV exports directly to your workspace.'
-                    : 'Personalized messages turn fresh leads into booked appointments.'}
-                </p>
+                <div>
+                  <h2>{modal === 'import' ? 'Import Leads' : 'Create an email campaign'}</h2>
+                  <p>
+                    {modal === 'import'
+                      ? 'Upload a CSV or TSV file to sync contacts into your workspace.'
+                      : 'Personalized messages turn fresh leads into booked appointments.'}
+                  </p>
+                </div>
               </div>
               <button
-                className="close-modal"
+                className="icon-btn"
                 onClick={() => setModal(null)}
                 aria-label="Close dialog"
               >
-                <X size={17} />
+                <X size={16} />
               </button>
             </div>
 
             {modal === 'import' ? (
-              <div className="import-body">
-                <div className="sheet-connected">
-                  <div className="source-icon">
-                    <FileSpreadsheet size={17} />
-                  </div>
-                  <div>
-                    <b>Meta lead spreadsheet</b>
-                  <span>Upload a Meta CSV or tab-separated export here</span>
-                  </div>
-                  <span className={`connected-pill ${sheetsStatus?.configured?'is-connected':'is-pending'}`}><i />{sheetsStatus?.configured?'Connected':'CSV import'}</span>
-                </div>
-
-                <div className="import-divider">
-                  <span>OR SELECT A CSV FILE</span>
-                </div>
-
-                <button
-                  className="drop-zone"
-                  onClick={() => fileRef.current?.click()}
-                  type="button"
+              <div className="import-modal-body">
+                <div
+                  className={`apple-dropzone ${isDraggingFile ? 'is-dragging' : ''} ${importingCsv ? 'is-uploading' : ''}`}
+                  onClick={() => !importingCsv && fileRef.current?.click()}
+                  onDragOver={e => {
+                    e.preventDefault();
+                    setIsDraggingFile(true);
+                  }}
+                  onDragLeave={() => setIsDraggingFile(false)}
+                  onDrop={e => {
+                    e.preventDefault();
+                    setIsDraggingFile(false);
+                    const file = e.dataTransfer.files?.[0];
+                    if (file) handleProcessImportFile(file);
+                  }}
+                  role="button"
+                  tabIndex={0}
                 >
-                  <div className="upload-icon">
-                    <CloudUpload size={20} />
+                  <div className="dropzone-icon-circle">
+                    {importingCsv ? (
+                      <RefreshCw size={24} className="spin" />
+                    ) : (
+                      <CloudUpload size={24} />
+                    )}
                   </div>
-                  <b>Choose a CSV file to import</b>
-                  <span>We’ll keep campaign, form, phone, and Meta lead status details.</span>
-                  <span className="browse-label">Browse files</span>
-                </button>
+                  <div className="dropzone-text-group">
+                    <span className="dropzone-title">
+                      {importingCsv ? 'Importing contacts...' : 'Choose a CSV file or drag & drop here'}
+                    </span>
+                    <span className="dropzone-subtitle">
+                      Supports Meta Lead Ads export, Google Sheets CSV, or CRM tables (.csv, .tsv)
+                    </span>
+                  </div>
+                  {!importingCsv && (
+                    <span className="dropzone-browse-button">
+                      Browse File
+                    </span>
+                  )}
+                </div>
+
                 <input
                   ref={fileRef}
                   type="file"
@@ -1741,33 +2801,47 @@ function App() {
                   onChange={onFile}
                 />
 
-                <div className="privacy-note">
-                  <ShieldCheck size={14} /> We match by email to prevent duplicate contacts in your workspace.
+                <div className="import-features-box">
+                  <div className="import-feature-item">
+                    <ShieldCheck size={16} className="feature-icon" />
+                    <div className="feature-text">
+                      <b>Automatic duplicate detection</b>
+                      <span>Existing leads with matching email addresses are updated without creating duplicate contacts.</span>
+                    </div>
+                  </div>
+                  <div className="import-feature-item">
+                    <FileSpreadsheet size={16} className="feature-icon" />
+                    <div className="feature-text">
+                      <b>Auto-mapped columns</b>
+                      <span>Name, email, phone, campaign, form name, and lead status are recognized automatically.</span>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="modal-footer">
                   <button
-                    className="button secondary"
+                    className="button-secondary-pill"
                     type="button"
                     onClick={() => setModal(null)}
+                    disabled={importingCsv}
                   >
                     Cancel
                   </button>
                   <button
-                    className="button primary"
+                    className="button-primary"
                     type="button"
-                    onClick={() => {
-                      setNotice('Select a CSV file to import contacts into your workspace.');
-                    }}
+                    onClick={() => fileRef.current?.click()}
+                    disabled={importingCsv}
                   >
-                    <Check size={14} /> Done
+                    <CloudUpload size={15} />
+                    <span>{importingCsv ? 'Importing…' : 'Select File'}</span>
                   </button>
                 </div>
               </div>
             ) : (
               <form onSubmit={sendCampaign} className="campaign-form">
                 <label>
-                  SAVED TEMPLATE
+                  <span>Email Template</span>
                   <select
                     value={selectedTemplateId}
                     onChange={e => {
@@ -1792,7 +2866,7 @@ function App() {
                   </select>
                 </label>
                 <label>
-                  CAMPAIGN NAME
+                  <span>Campaign Name</span>
                   <input
                     required
                     value={campaignName}
@@ -1801,7 +2875,7 @@ function App() {
                   />
                 </label>
                 <label>
-                  RECIPIENT CATEGORY
+                  <span>Recipient Category</span>
                   <select value={campaignAudience} onChange={event => setCampaignAudience(event.target.value as CampaignAudience)}>
                     <option value="new">New leads ({leads.filter(lead => lead.status === 'new').length})</option>
                     <option value="contacted">Contacted leads ({leads.filter(lead => lead.status === 'contacted').length})</option>
@@ -1810,20 +2884,198 @@ function App() {
                     <option value="all">All active leads ({leads.filter(lead => lead.status !== 'unsubscribed').length})</option>
                   </select>
                 </label>
+
+                <div className={`campaign-date-card ${campaignDateFilterEnabled ? 'active' : ''}`}>
+                  <div className="campaign-date-card-head">
+                    <div className="campaign-date-card-title-group">
+                      <div className="campaign-date-card-icon">
+                        <CalendarDays size={16} />
+                      </div>
+                      <div>
+                        <div className="campaign-date-card-title">Filter by lead arrival date</div>
+                        <div className="campaign-date-card-subtitle">
+                          {campaignDateFilterEnabled ? 'Only targeting leads who joined within this timeframe' : 'Send to leads regardless of when they signed up'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={campaignDateFilterEnabled}
+                      aria-label="Toggle date range filter"
+                      className={`designer-toggle-switch ${campaignDateFilterEnabled ? 'active' : ''}`}
+                      onClick={() => {
+                        const next = !campaignDateFilterEnabled;
+                        setCampaignDateFilterEnabled(next);
+                        if (!next) {
+                          setCampaignFromDate('');
+                          setCampaignToDate('');
+                        }
+                      }}
+                    >
+                      <span className="designer-switch-knob" />
+                    </button>
+                  </div>
+
+                  {campaignDateFilterEnabled && (
+                    <div className="campaign-date-card-body">
+                      <div className="campaign-date-presets-row">
+                        <span className="presets-label">QUICK SELECT:</span>
+                        <div className="campaign-date-presets">
+                          <button
+                            type="button"
+                            className={`date-preset-chip ${campaignFromDate === new Date().toISOString().slice(0, 10) && campaignToDate === new Date().toISOString().slice(0, 10) ? 'selected' : ''}`}
+                            onClick={() => {
+                              const now = new Date();
+                              const ymd = now.toISOString().slice(0, 10);
+                              setCampaignFromDate(ymd);
+                              setCampaignToDate(ymd);
+                            }}
+                          >
+                            Today
+                          </button>
+                          <button
+                            type="button"
+                            className="date-preset-chip"
+                            onClick={() => {
+                              const now = new Date();
+                              const past = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
+                              setCampaignFromDate(past.toISOString().slice(0, 10));
+                              setCampaignToDate(now.toISOString().slice(0, 10));
+                            }}
+                          >
+                            Past 7 days
+                          </button>
+                          <button
+                            type="button"
+                            className="date-preset-chip"
+                            onClick={() => {
+                              const now = new Date();
+                              const past = new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000);
+                              setCampaignFromDate(past.toISOString().slice(0, 10));
+                              setCampaignToDate(now.toISOString().slice(0, 10));
+                            }}
+                          >
+                            Past 30 days
+                          </button>
+                          <button
+                            type="button"
+                            className="date-preset-chip"
+                            onClick={() => {
+                              const now = new Date();
+                              const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+                              setCampaignFromDate(startOfMonth.toISOString().slice(0, 10));
+                              setCampaignToDate(now.toISOString().slice(0, 10));
+                            }}
+                          >
+                            This month
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="campaign-date-range-row">
+                        <div className="campaign-date-box">
+                          <span className="date-field-label">START DATE (FROM)</span>
+                          <div className="date-input-wrapper">
+                            <input
+                              type="date"
+                              value={campaignFromDate}
+                              onChange={e => setCampaignFromDate(e.target.value)}
+                              max={campaignToDate || undefined}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="date-range-separator">
+                          <ArrowRight size={14} />
+                        </div>
+
+                        <div className="campaign-date-box">
+                          <span className="date-field-label">END DATE (TO)</span>
+                          <div className="date-input-wrapper">
+                            <input
+                              type="date"
+                              value={campaignToDate}
+                              onChange={e => setCampaignToDate(e.target.value)}
+                              min={campaignFromDate || undefined}
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className={`campaign-date-result-pill ${campaignRecipients.length === 0 ? 'empty' : 'matched'}`}>
+                        <div className="pill-left">
+                          <span className="pill-dot" />
+                          <span>
+                            {campaignFromDate || campaignToDate ? (
+                              campaignRecipients.length > 0 ? (
+                                <>
+                                  <b>{campaignRecipients.length} {campaignRecipients.length === 1 ? 'lead matches' : 'leads match'}</b>{' '}
+                                  ({campaignFromDate && campaignToDate
+                                    ? `${new Date(campaignFromDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${new Date(campaignToDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+                                    : campaignFromDate
+                                    ? `since ${new Date(campaignFromDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+                                    : `up to ${new Date(campaignToDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`})
+                                </>
+                              ) : (
+                                <b>0 leads found in this date window</b>
+                              )
+                            ) : (
+                              'Select a start and end date to filter recipients'
+                            )}
+                          </span>
+                        </div>
+
+                        {(campaignFromDate || campaignToDate) && (
+                          <button
+                            type="button"
+                            className="pill-clear-btn"
+                            onClick={() => {
+                              setCampaignFromDate('');
+                              setCampaignToDate('');
+                            }}
+                          >
+                            Reset dates
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <label>
-                  {selectedTemplateId?'SAVED TEMPLATE PREVIEW':'EMAIL BODY'}
-                  {selectedTemplateId?<div className="campaign-template-preview"><iframe title="Selected email template preview" sandbox="" srcDoc={emailHtml}/><small><CheckCircle2 size={12}/> Saved responsive design · personalized with merge tags</small></div>:<textarea required rows={7} value={message} onChange={e=>setMessage(e.target.value)} placeholder="Hi {{name}}, thanks for getting in touch..."/>}
+                  <span>{selectedTemplateId ? 'Saved Template Preview' : 'Email Body'}</span>
+                  {selectedTemplateId ? (
+                    <div className="campaign-template-preview">
+                      <iframe title="Selected email template preview" sandbox="" srcDoc={emailHtml}/>
+                      <small><CheckCircle2 size={12}/> Saved responsive design · personalized with merge tags</small>
+                    </div>
+                  ) : (
+                    <textarea required rows={6} value={message} onChange={e=>setMessage(e.target.value)} placeholder="Hi {{name}}, thanks for getting in touch..."/>
+                  )}
                 </label>
 
-                <label className="schedule-field">SCHEDULE SEND (OPTIONAL)<input type="datetime-local" value={scheduleAt} min={new Date(Date.now()+60000).toISOString().slice(0,16)} onChange={e=>setScheduleAt(e.target.value)}/><small>Leave blank to queue as soon as possible.</small></label>
+                <label className="schedule-field">
+                  <span>Schedule Send (Optional)</span>
+                  <input type="datetime-local" value={scheduleAt} min={new Date(Date.now()+60000).toISOString().slice(0,16)} onChange={e=>setScheduleAt(e.target.value)}/>
+                  <small>Leave blank to queue and send immediately.</small>
+                </label>
 
                 <div className="recipient-preview">
                   <Users size={14} />
                   <span>Sending to:</span>
                   <b>
                     {campaignRecipients.length} {campaignAudience === 'selected' ? 'selected' : campaignAudience === 'all' ? 'active' : campaignAudience} {campaignRecipients.length === 1 ? 'lead' : 'leads'}
+                    {campaignDateFilterEnabled && (campaignFromDate || campaignToDate) ? ' in date range' : ''}
                   </b>
-                  <small>{campaignAudience === 'all' ? '· unsubscribed leads are excluded' : '· sender configured by workspace admin'}</small>
+                  <small>
+                    {campaignRecipients.length === 0
+                      ? '· No matching leads in this date range & status'
+                      : campaignAudience === 'all'
+                      ? '· unsubscribed leads are excluded'
+                      : '· sender configured by workspace admin'}
+                  </small>
                 </div>
 
                 <div className="modal-footer">
@@ -1957,22 +3209,20 @@ function App() {
                     <div className="form-group">
                       <label htmlFor="sheet-url-input">
                         <span>Google Sheets URL</span>
-                        <small>Paste the full URL from your browser address bar</small>
                       </label>
                       <input
                         id="sheet-url-input"
                         type="url"
                         value={sheetUrl}
                         onChange={e => setSheetUrl(e.target.value)}
-                        placeholder="https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit"
+                        placeholder="Paste spreadsheet link from browser address bar"
                         required
                       />
                     </div>
 
                     <div className="form-group">
                       <label htmlFor="sheet-range-input">
-                        <span>Sheet tab name and range</span>
-                        <small>Tab name and column span (must have an "Email" column header)</small>
+                        <span>Sheet Tab & Range</span>
                       </label>
                       <input
                         id="sheet-range-input"
@@ -1982,7 +3232,7 @@ function App() {
                         required
                       />
                       <div className="range-hints">
-                        <span className="hint-label">Common examples:</span>
+                        <span className="hint-label">Suggestions:</span>
                         <button
                           type="button"
                           className="range-chip"
@@ -2006,6 +3256,22 @@ function App() {
                         </button>
                       </div>
                     </div>
+
+                    {leads.length > 0 && (
+                      <div className="sheet-options-panel">
+                        <label className="sheet-sync-option">
+                          <input
+                            type="checkbox"
+                            checked={clearBeforeSync}
+                            onChange={e => setClearBeforeSync(e.target.checked)}
+                          />
+                          <div className="option-text">
+                            <b>Replace existing leads ({leads.length})</b>
+                            <span>Start fresh with only leads from this spreadsheet</span>
+                          </div>
+                        </label>
+                      </div>
+                    )}
 
                     <div className="sheet-form-actions">
                       <button

@@ -141,11 +141,12 @@ export function compileEmailHtml(blocks: TemplateBlock[], settings: EmailSetting
         const fontSize = level === 'h1' ? '26px' : level === 'h2' ? '20px' : '15px';
         const fontWeight = level === 'h3' ? '700' : '800';
         const letterSpacing = level === 'h3' ? '0.08em' : '-0.02em';
+        const cleanedText = String(text).replace(/\u00A0/g, ' ');
         return `
           <tr>
-            <td style="padding: 10px 0; text-align: ${align};">
-              <${level} style="margin: 0; font-family: ${fontFamily}; font-size: ${fontSize}; font-weight: ${fontWeight}; color: ${color}; letter-spacing: ${letterSpacing}; line-height: 1.3;">
-                ${escapeHtml(text)}
+            <td style="padding: 10px 0; text-align: ${align}; word-break: break-word; overflow-wrap: anywhere;">
+              <${level} style="margin: 0; font-family: ${fontFamily}; font-size: ${fontSize}; font-weight: ${fontWeight}; color: ${color}; letter-spacing: ${letterSpacing}; line-height: 1.3; word-break: break-word; overflow-wrap: anywhere;">
+                ${escapeHtml(cleanedText)}
               </${level}>
             </td>
           </tr>
@@ -154,13 +155,14 @@ export function compileEmailHtml(blocks: TemplateBlock[], settings: EmailSetting
       case 'text': {
         const { text = '', align = 'left', color = '#4a574f' } = block.content;
         const paragraphs = String(text)
+          .replace(/\u00A0/g, ' ')
           .split(/\n{2,}|\n/)
           .filter(Boolean)
-          .map(p => `<p style="margin: 0 0 12px 0; font-family: ${fontFamily}; font-size: 15px; line-height: 1.65; color: ${color}; text-align: ${align};">${escapeHtml(p)}</p>`)
+          .map(p => `<p style="margin: 0 0 12px 0; font-family: ${fontFamily}; font-size: 15px; line-height: 1.65; color: ${color}; text-align: ${align}; word-break: break-word; overflow-wrap: anywhere;">${escapeHtml(p)}</p>`)
           .join('');
         return `
           <tr>
-            <td style="padding: 8px 0;">
+            <td style="padding: 8px 0; word-break: break-word; overflow-wrap: anywhere;">
               ${paragraphs || '<p style="margin:0;">&nbsp;</p>'}
             </td>
           </tr>
@@ -168,14 +170,15 @@ export function compileEmailHtml(blocks: TemplateBlock[], settings: EmailSetting
       }
       case 'button': {
         const { text = 'Click here', url = '#', align = 'center', bgColor = '#176b4b', textColor = '#ffffff', borderRadius = 8 } = block.content;
+        const cleanedBtnText = String(text).replace(/\u00A0/g, ' ');
         return `
           <tr>
             <td style="padding: 16px 0; text-align: ${align};">
               <table border="0" cellspacing="0" cellpadding="0" style="margin: ${align === 'center' ? '0 auto' : align === 'right' ? '0 0 0 auto' : '0'};">
                 <tr>
                   <td align="center" style="border-radius: ${borderRadius}px; background-color: ${bgColor};">
-                    <a href="${escapeHtml(url)}" target="_blank" style="font-family: ${fontFamily}; font-size: 15px; font-weight: 700; color: ${textColor}; text-decoration: none; padding: 13px 26px; border-radius: ${borderRadius}px; display: inline-block; border: 1px solid ${bgColor};">
-                      ${escapeHtml(text)}
+                    <a href="${escapeHtml(url)}" target="_blank" style="font-family: ${fontFamily}; font-size: 15px; font-weight: 700; color: ${textColor}; text-decoration: none; padding: 13px 26px; border-radius: ${borderRadius}px; display: inline-block; border: 1px solid ${bgColor}; word-break: break-word; overflow-wrap: anywhere;">
+                      ${escapeHtml(cleanedBtnText)}
                     </a>
                   </td>
                 </tr>
@@ -197,15 +200,18 @@ export function compileEmailHtml(blocks: TemplateBlock[], settings: EmailSetting
       }
       case 'feature': {
         const { badge = 'NOTE', title = 'Feature highlight', description = '', bg = '#f4f8f5' } = block.content;
+        const cleanedBadge = badge ? String(badge).replace(/\u00A0/g, ' ') : '';
+        const cleanedTitle = String(title).replace(/\u00A0/g, ' ');
+        const cleanedDesc = String(description).replace(/\u00A0/g, ' ');
         return `
           <tr>
             <td style="padding: 14px 0;">
-              <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: ${bg}; border-radius: 10px; border: 1px solid #e1ece5;">
+              <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: ${bg}; border-radius: 10px; border: 1px solid #e1ece5; table-layout: fixed;">
                 <tr>
-                  <td style="padding: 20px 22px;">
-                    ${badge ? `<div style="font-family: ${fontFamily}; font-size: 11px; font-weight: 800; color: #176b4b; letter-spacing: 0.08em; margin-bottom: 6px;">${escapeHtml(badge)}</div>` : ''}
-                    <div style="font-family: ${fontFamily}; font-size: 16px; font-weight: 700; color: #1b2820; margin-bottom: 6px;">${escapeHtml(title)}</div>
-                    <div style="font-family: ${fontFamily}; font-size: 14px; line-height: 1.55; color: #48584e;">${escapeHtml(description)}</div>
+                  <td style="padding: 20px 22px; word-break: break-word; overflow-wrap: anywhere;">
+                    ${cleanedBadge ? `<div style="font-family: ${fontFamily}; font-size: 11px; font-weight: 800; color: #176b4b; letter-spacing: 0.08em; margin-bottom: 6px; word-break: break-word; overflow-wrap: anywhere;">${escapeHtml(cleanedBadge)}</div>` : ''}
+                    <div style="font-family: ${fontFamily}; font-size: 16px; font-weight: 700; color: #1b2820; margin-bottom: 6px; word-break: break-word; overflow-wrap: anywhere;">${escapeHtml(cleanedTitle)}</div>
+                    <div style="font-family: ${fontFamily}; font-size: 14px; line-height: 1.55; color: #48584e; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;">${escapeHtml(cleanedDesc)}</div>
                   </td>
                 </tr>
               </table>
@@ -273,6 +279,7 @@ export function compileEmailHtml(blocks: TemplateBlock[], settings: EmailSetting
     img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
     table { border-collapse: collapse !important; }
     body { height: 100% !important; margin: 0 !important; padding: 0 !important; width: 100% !important; font-family: ${fontFamily}; }
+    p, div, span, h1, h2, h3, td { overflow-wrap: anywhere !important; word-break: break-word !important; }
     @media screen and (max-width: 620px) {
       .email-container { width: 100% !important; padding: 12px !important; }
       .email-card { padding: 22px 18px !important; }
@@ -283,7 +290,7 @@ export function compileEmailHtml(blocks: TemplateBlock[], settings: EmailSetting
   <table border="0" cellpadding="0" cellspacing="0" width="100%">
     <tr>
       <td align="center">
-        <table class="email-container" border="0" cellpadding="0" cellspacing="0" width="600" style="max-width: 600px; width: 100%;">
+        <table class="email-container" border="0" cellpadding="0" cellspacing="0" width="600" style="max-width: 600px; width: 100%; table-layout: fixed;">
           <tr>
             <td class="email-card" style="background-color: ${cardColor}; border-radius: 14px; padding: 36px 32px; border: 1px solid #e1e7e2; box-shadow: 0 4px 18px rgba(0,0,0,0.03);">
               <table border="0" cellpadding="0" cellspacing="0" width="100%">

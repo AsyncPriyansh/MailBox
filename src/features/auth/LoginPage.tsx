@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Mail, Lock, ArrowRight, Loader2, ShieldCheck } from 'lucide-react';
+import { Mail, Lock, ArrowRight, Loader2, ShieldCheck, Sparkles, Send, Users } from 'lucide-react';
 import { authApi, type AuthUser } from '../../services/authApi';
 
 interface LoginModalProps {
@@ -15,7 +15,7 @@ export function LoginPage({ onSuccess }: LoginModalProps) {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!email || !password) {
-      setError('Please fill in both email and password.');
+      setError('Please enter both your email and password.');
       return;
     }
     setError(null);
@@ -26,171 +26,165 @@ export function LoginPage({ onSuccess }: LoginModalProps) {
       localStorage.setItem('mailbox_auth_user', JSON.stringify(res.user));
       onSuccess(res.user, res.token);
     } catch (err: any) {
-      setError(err?.message || 'Login failed. Please check your credentials.');
+      setError(err?.message || 'Authentication failed. Please verify credentials.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div style={{
-      minHeight: '100vh',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: '#f8fafc',
-      padding: '1.5rem',
-      fontFamily: 'Inter, system-ui, -apple-system, sans-serif'
-    }}>
-      <div style={{
-        width: '100%',
-        maxWidth: '420px',
-        backgroundColor: '#ffffff',
-        borderRadius: '16px',
-        border: '1px solid #e2e8f0',
-        boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05)',
-        padding: '2.5rem 2rem',
-      }}>
-        {/* Logo / Header */}
-        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: '52px',
-            height: '52px',
-            borderRadius: '12px',
-            backgroundColor: '#0f172a',
-            color: '#ffffff',
-            marginBottom: '1rem',
-            boxShadow: '0 4px 12px rgba(15, 23, 42, 0.15)'
-          }}>
-            <ShieldCheck size={28} />
+    <div className="apple-login-viewport">
+      {/* 48px Apple Header for login */}
+      <header className="apple-login-nav">
+        <div className="apple-login-nav-inner">
+          <div className="apple-login-nav-brand">
+            <div className="apple-login-nav-logo">
+              <Mail size={15} />
+            </div>
+            <span className="apple-login-nav-wordmark">Mailbox</span>
           </div>
-          <h1 style={{ fontSize: '1.5rem', fontWeight: '700', color: '#0f172a', margin: '0 0 0.5rem 0' }}>
-            MailBox Portal
-          </h1>
-          <p style={{ fontSize: '0.875rem', color: '#64748b', margin: 0 }}>
-            Sign in to access your leads and campaigns
-          </p>
+          <div className="apple-login-nav-cluster">
+            <span className="apple-login-nav-status">Private Workspace Portal</span>
+          </div>
         </div>
+      </header>
 
-        {error && (
-          <div style={{
-            padding: '0.75rem 1rem',
-            backgroundColor: '#fef2f2',
-            border: '1px solid #fecaca',
-            borderRadius: '8px',
-            color: '#b91c1c',
-            fontSize: '0.85rem',
-            marginBottom: '1.5rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem'
-          }}>
-            {error}
-          </div>
-        )}
+      {/* Split Hero: Dark Stage Tile on Left, Pure White Utility Tile on Right */}
+      <main className="apple-login-stage">
+        <div className="apple-login-grid">
+          {/* Near-Black Tile 1 (#272729) Stage */}
+          <div className="apple-login-hero-tile">
+            <div className="hero-tile-top">
+              <span className="hero-apple-eyebrow">Outreach Architecture</span>
+              <h1 className="hero-apple-headline">
+                High-converting lead outreach. Grounded in clarity.
+              </h1>
+              <p className="hero-apple-description">
+                Direct Meta Lead Ads sync to ZeptoMail outreach with instant welcome triggers, audience filtering, and zero friction.
+              </p>
+            </div>
 
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          <div>
-            <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: '600', color: '#334155', marginBottom: '0.5rem' }}>
-              Email address
-            </label>
-            <div style={{ position: 'relative' }}>
-              <div style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }}>
-                <Mail size={18} />
+            <div className="hero-tile-features">
+              <div className="hero-tile-pill-row">
+                <div className="hero-feature-item">
+                  <div className="hero-feature-icon">
+                    <Users size={16} />
+                  </div>
+                  <div>
+                    <b>Meta Lead Sync</b>
+                    <span>Automatic continuous ingestion</span>
+                  </div>
+                </div>
+
+                <div className="hero-feature-item">
+                  <div className="hero-feature-icon">
+                    <Send size={16} />
+                  </div>
+                  <div>
+                    <b>ZeptoMail Outreach</b>
+                    <span>High deliverability transactional pipe</span>
+                  </div>
+                </div>
+
+                <div className="hero-feature-item">
+                  <div className="hero-feature-icon">
+                    <Sparkles size={16} />
+                  </div>
+                  <div>
+                    <b>Instant Welcome</b>
+                    <span>First-touch automated sequences</span>
+                  </div>
+                </div>
               </div>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="admin@metabullmedia.com"
-                required
-                style={{
-                  width: '100%',
-                  padding: '0.6875rem 1rem 0.6875rem 2.5rem',
-                  fontSize: '0.9375rem',
-                  borderRadius: '8px',
-                  border: '1px solid #cbd5e1',
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                  transition: 'border-color 0.15s ease',
-                }}
-              />
+            </div>
+
+            <div className="hero-tile-footer">
+              <span>Apple Design System Standard · 2026 Release</span>
             </div>
           </div>
 
-          <div>
-            <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: '600', color: '#334155', marginBottom: '0.5rem' }}>
-              Password
-            </label>
-            <div style={{ position: 'relative' }}>
-              <div style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }}>
-                <Lock size={18} />
+          {/* Pure White Utility Tile (#ffffff on #f5f5f7 canvas) */}
+          <div className="apple-login-form-tile">
+            <div className="login-form-header">
+              <div className="login-badge-mark">
+                <ShieldCheck size={22} />
               </div>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••••••"
-                required
-                style={{
-                  width: '100%',
-                  padding: '0.6875rem 1rem 0.6875rem 2.5rem',
-                  fontSize: '0.9375rem',
-                  borderRadius: '8px',
-                  border: '1px solid #cbd5e1',
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                  transition: 'border-color 0.15s ease',
-                }}
-              />
+              <h2 className="login-tile-title">Sign in to Mailbox</h2>
+              <p className="login-tile-subtitle">
+                Enter your administrative credentials to open your command workspace.
+              </p>
             </div>
-          </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            style={{
-              marginTop: '0.5rem',
-              width: '100%',
-              padding: '0.75rem 1rem',
-              borderRadius: '8px',
-              backgroundColor: '#0f172a',
-              color: '#ffffff',
-              fontSize: '0.9375rem',
-              fontWeight: '600',
-              border: 'none',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '0.5rem',
-              transition: 'background-color 0.15s ease',
-              boxShadow: '0 2px 4px rgba(15, 23, 42, 0.1)'
-            }}
-          >
-            {loading ? (
-              <>
-                <Loader2 size={18} className="animate-spin" />
-                Signing in...
-              </>
-            ) : (
-              <>
-                Sign in to Dashboard
-                <ArrowRight size={18} />
-              </>
+            {error && (
+              <div className="apple-banner apple-banner-error" role="alert">
+                <span>{error}</span>
+              </div>
             )}
-          </button>
-        </form>
 
-        <div style={{ marginTop: '2rem', textAlign: 'center', borderTop: '1px solid #f1f5f9', paddingTop: '1.25rem' }}>
-          <p style={{ fontSize: '0.75rem', color: '#94a3b8', margin: 0 }}>
-            Protected Client Dashboard • Metabull Media
-          </p>
+            <form onSubmit={handleSubmit} className="apple-login-form">
+              <div className="apple-field-group">
+                <label className="apple-label" htmlFor="login-email">
+                  Email Address
+                </label>
+                <div className="apple-input-wrapper">
+                  <Mail size={16} className="apple-input-icon" />
+                  <input
+                    id="login-email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="name@company.com"
+                    required
+                    autoComplete="email"
+                    className="apple-input"
+                  />
+                </div>
+              </div>
+
+              <div className="apple-field-group">
+                <label className="apple-label" htmlFor="login-password">
+                  Password
+                </label>
+                <div className="apple-input-wrapper">
+                  <Lock size={16} className="apple-input-icon" />
+                  <input
+                    id="login-password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                    required
+                    autoComplete="current-password"
+                    className="apple-input"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="button-primary login-submit-btn"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 size={16} className="spin" />
+                    <span>Signing in…</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Continue to Workspace</span>
+                    <ArrowRight size={16} />
+                  </>
+                )}
+              </button>
+            </form>
+
+            <div className="login-footer-security">
+              <p>Metabull Media Private Workspace · Secured Session</p>
+            </div>
+          </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

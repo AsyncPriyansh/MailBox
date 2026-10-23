@@ -47,12 +47,22 @@ type Props = {
 
 export function TemplateStudio({ template, onBack, onSaved }: Props) {
   // Initial state setup
+  const sanitizeBlockContent = (b: TemplateBlock): TemplateBlock => {
+    const c = { ...b.content };
+    if (typeof c.text === 'string') c.text = c.text.replace(/\u00A0/g, ' ');
+    if (typeof c.description === 'string') c.description = c.description.replace(/\u00A0/g, ' ');
+    if (typeof c.title === 'string') c.title = c.title.replace(/\u00A0/g, ' ');
+    if (typeof c.badge === 'string') c.badge = c.badge.replace(/\u00A0/g, ' ');
+    return { ...b, content: c };
+  };
+
+  // Initial state setup
   const initialData = useMemo(() => {
     if (template?.project_json && typeof template.project_json === 'object') {
       const proj = template.project_json as any;
       if (Array.isArray(proj.blocks)) {
         return {
-          blocks: proj.blocks as TemplateBlock[],
+          blocks: (proj.blocks as TemplateBlock[]).map(sanitizeBlockContent),
           settings: (proj.settings || {}) as Partial<EmailSettings>,
         };
       }
@@ -76,7 +86,7 @@ export function TemplateStudio({ template, onBack, onSaved }: Props) {
     }
     // Fallback to default preset
     return {
-      blocks: STARTER_PRESETS.lead_welcome.blocks,
+      blocks: STARTER_PRESETS.lead_welcome.blocks.map(sanitizeBlockContent),
       settings: {
         subject: template?.subject || STARTER_PRESETS.lead_welcome.subject,
         preheader: template?.preheader || STARTER_PRESETS.lead_welcome.preheader,
@@ -118,8 +128,14 @@ export function TemplateStudio({ template, onBack, onSaved }: Props) {
   );
 
   const updateBlockContent = (id: string, patch: Record<string, any>) => {
+    const sanitizedPatch = { ...patch };
+    if (typeof sanitizedPatch.text === 'string') sanitizedPatch.text = sanitizedPatch.text.replace(/\u00A0/g, ' ');
+    if (typeof sanitizedPatch.description === 'string') sanitizedPatch.description = sanitizedPatch.description.replace(/\u00A0/g, ' ');
+    if (typeof sanitizedPatch.title === 'string') sanitizedPatch.title = sanitizedPatch.title.replace(/\u00A0/g, ' ');
+    if (typeof sanitizedPatch.badge === 'string') sanitizedPatch.badge = sanitizedPatch.badge.replace(/\u00A0/g, ' ');
+
     setBlocks(prev =>
-      prev.map(b => (b.id === id ? { ...b, content: { ...b.content, ...patch } } : b))
+      prev.map(b => (b.id === id ? { ...b, content: { ...b.content, ...sanitizedPatch } } : b))
     );
     setDirty(true);
   };
@@ -644,11 +660,11 @@ export function TemplateStudio({ template, onBack, onSaved }: Props) {
                   {block.type === 'heading' && (
                     <div style={{ textAlign: block.content.align || 'left', color: block.content.color || '#1a241e' }}>
                       {block.content.level === 'h1' ? (
-                        <h1 className="studio-block-h1">{block.content.text}</h1>
+                        <h1 className="studio-block-h1">{String(block.content.text || '').replace(/\u00A0/g, ' ')}</h1>
                       ) : block.content.level === 'h3' ? (
-                        <h3 className="studio-block-h3">{block.content.text}</h3>
+                        <h3 className="studio-block-h3">{String(block.content.text || '').replace(/\u00A0/g, ' ')}</h3>
                       ) : (
-                        <h2 className="studio-block-h2">{block.content.text}</h2>
+                        <h2 className="studio-block-h2">{String(block.content.text || '').replace(/\u00A0/g, ' ')}</h2>
                       )}
                     </div>
                   )}
@@ -659,6 +675,7 @@ export function TemplateStudio({ template, onBack, onSaved }: Props) {
                       style={{ textAlign: block.content.align || 'left', color: block.content.color || '#4a574f' }}
                     >
                       {String(block.content.text || '')
+                        .replace(/\u00A0/g, ' ')
                         .split('\n')
                         .map((line, i) => (
                           <p key={i}>{line || '\u00A0'}</p>
@@ -676,7 +693,7 @@ export function TemplateStudio({ template, onBack, onSaved }: Props) {
                           borderRadius: `${block.content.borderRadius || 8}px`,
                         }}
                       >
-                        {block.content.text}
+                        {String(block.content.text || '').replace(/\u00A0/g, ' ')}
                       </span>
                     </div>
                   )}
@@ -696,9 +713,9 @@ export function TemplateStudio({ template, onBack, onSaved }: Props) {
                       className="studio-block-feature"
                       style={{ backgroundColor: block.content.bg || '#f3f8f5' }}
                     >
-                      {block.content.badge && <small>{block.content.badge}</small>}
-                      <strong>{block.content.title}</strong>
-                      <p>{block.content.description}</p>
+                      {block.content.badge && <small>{String(block.content.badge).replace(/\u00A0/g, ' ')}</small>}
+                      <strong>{String(block.content.title || '').replace(/\u00A0/g, ' ')}</strong>
+                      <p>{String(block.content.description || '').replace(/\u00A0/g, ' ')}</p>
                     </div>
                   )}
 

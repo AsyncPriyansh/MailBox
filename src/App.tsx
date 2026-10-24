@@ -41,11 +41,18 @@ import {
   TrendingUp,
   ExternalLink,
   Unlink,
+  Download,
+  Phone,
+  Building2,
+  Loader2,
+  LayoutTemplate,
+  Monitor,
+  Smartphone,
 } from 'lucide-react';
 import type { Lead } from './types/domain';
 import { ApiError } from './services/http';
 import { leadsApi } from './services/leadsApi';
-import { campaignsApi, dashboardApi, welcomeEmailsApi, type WelcomeEmailRecord } from './services/campaignsApi';
+import { campaignsApi, dashboardApi, welcomeEmailsApi, type WelcomeEmailRecord, type CampaignRecipient } from './services/campaignsApi';
 import { parseLeadCsv, downloadLeadCsv } from './features/leads/csv';
 import { templatesApi, emailSettingsApi, type EmailTemplate, type EmailSettings } from './services/templatesApi';
 import { googleSheetsApi, type SheetsSyncStatus } from './services/googleSheetsApi';
@@ -93,6 +100,15 @@ function App() {
   const [campaignSearchQuery, setCampaignSearchQuery] = useState('');
   const [campaignStatusFilter, setCampaignStatusFilter] = useState<'all' | 'completed' | 'scheduled' | 'sending' | 'failed'>('all');
   const [selectedCampaignDetail, setSelectedCampaignDetail] = useState<any | null>(null);
+  const [detailRecipients, setDetailRecipients] = useState<CampaignRecipient[]>([]);
+  const [loadingDetailRecipients, setLoadingDetailRecipients] = useState(false);
+  const [campaignRecipientSearch, setCampaignRecipientSearch] = useState('');
+  const [campaignRecipientPage, setCampaignRecipientPage] = useState(1);
+  const [campaignRecipientPerPage, setCampaignRecipientPerPage] = useState(25);
+  const [campaignModalTab, setCampaignModalTab] = useState<'template' | 'recipients' | 'overview'>('template');
+  const [recipientStatusFilter, setRecipientStatusFilter] = useState<'all' | 'delivered' | 'scheduled' | 'failed'>('all');
+  const [previewDevice, setPreviewDevice] = useState<'desktop' | 'mobile'>('desktop');
+  const [previewPersonalized, setPreviewPersonalized] = useState(true);
   const [refreshingCampaigns, setRefreshingCampaigns] = useState(false);
   const [dataReady, setDataReady] = useState(false);
   const [serviceError, setServiceError] = useState('');
@@ -156,6 +172,10 @@ function App() {
   const [welcomeTotalSent, setWelcomeTotalSent] = useState<number>(0);
   const [outboundTab, setOutboundTab] = useState<'campaigns' | 'welcome'>('campaigns');
   const [welcomeSearchQuery, setWelcomeSearchQuery] = useState('');
+  const [campaignPage, setCampaignPage] = useState(1);
+  const [campaignsPerPage, setCampaignsPerPage] = useState<number>(10);
+  const [welcomePage, setWelcomePage] = useState(1);
+  const [welcomePerPage, setWelcomePerPage] = useState<number>(25);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -343,11 +363,14 @@ function App() {
   const syncGoogleSheet = async()=>{setSyncingSheet(true);try{const result=await googleSheetsApi.syncNow();const [leadResult,dashboard,sheetStatus]=await Promise.all([leadsApi.list(),dashboardApi.stats(),googleSheetsApi.status()]);setLeads(leadResult.leads.map(toUiLead));setStats(dashboard.stats);setSheetsStatus(sheetStatus);setNotice(`Google Sheet synced: ${result.imported} lead rows processed.`);}catch(error){setNotice(error instanceof Error?error.message:'Google Sheets sync failed.');}finally{setSyncingSheet(false);}};
   const connectGoogle=async()=>{try{const{authUrl}=await googleSheetsApi.connectUrl();window.location.assign(authUrl);}catch(error){setNotice(error instanceof Error?error.message:'Could not start Google connection.');}};
   const clearAllOldLeads = () => {
+    const isSheetConnected = Boolean(sheetsStatus?.configured);
     setConfirmDialog({
       open: true,
-      title: 'Delete all old leads?',
-      message: `Are you sure you want to permanently delete all ${leads.length} leads in this workspace? This will clear out old sheet records so you can connect a new sheet and start completely fresh. This action cannot be undone.`,
-      confirmLabel: 'Yes, delete old leads',
+      title: isSheetConnected ? 'Clear leads & check Google Sheet sync' : 'Delete all old leads?',
+      message: isSheetConnected
+        ? `⚠️ Google Sheets live sync is currently ACTIVE.\n\nYour connected sheet ("${sheetsStatus?.spreadsheetTitle || 'Google Sheet'}") will re-import these rows on the next 5-minute sync.\n\nIf you want your workspace to stay completely empty, please disconnect the Google Sheet too.`
+        : `Are you sure you want to permanently delete all ${leads.length} leads in this workspace? This will clear out old records so you can start completely fresh. This action cannot be undone.`,
+      confirmLabel: isSheetConnected ? 'Delete leads anyway' : 'Yes, delete old leads',
       isDestructive: true,
       onConfirm: async () => {
         setSyncingSheet(true);
@@ -355,7 +378,11 @@ function App() {
           const res = await leadsApi.clearAll();
           await fetchWorkspaceData();
           setSelected([]);
-          setNotice(`Cleared ${res.deleted || leads.length} old leads. Your workspace is ready for a fresh sheet!`);
+          setNotice(
+            isSheetConnected
+              ? `Cleared ${res.deleted || leads.length} old leads. Remember to disconnect your Google Sheet if you do not want it to re-sync.`
+              : `Cleared ${res.deleted || leads.length} old leads. Your workspace is ready for a fresh sheet!`
+          );
         } catch (err) {
           setNotice(err instanceof Error ? err.message : 'Failed to clear old leads.');
         } finally {
@@ -367,18 +394,26 @@ function App() {
 
   const deleteSelectedLeads = () => {
     if (!selected.length) return;
+    const isSheetConnected = Boolean(sheetsStatus?.configured);
+
     setConfirmDialog({
       open: true,
-      title: `Delete ${selected.length} selected leads?`,
-      message: `Are you sure you want to permanently delete ${selected.length} selected leads from this workspace? This cannot be undone.`,
-      confirmLabel: 'Delete leads',
+      title: `Delete ${selected.length} selected lead${selected.length === 1 ? '' : 's'}?`,
+      message: isSheetConnected
+        ? `⚠️ Google Sheets live sync is currently CONNECTED ("${sheetsStatus?.spreadsheetTitle || 'Sheet'}").\n\nIf these rows still exist in your Google Sheet, the 5-minute background poller will re-sync them into your dashboard (welcome emails will NEVER be sent again).\n\nTo remove them permanently, please disconnect the Google Sheet or delete their rows directly from the spreadsheet.`
+        : `Are you sure you want to permanently delete ${selected.length} selected lead${selected.length === 1 ? '' : 's'} from this workspace? This cannot be undone.`,
+      confirmLabel: isSheetConnected ? 'Delete from dashboard' : 'Delete leads',
       isDestructive: true,
       onConfirm: async () => {
         try {
           const res = await leadsApi.deleteSelected(selected);
           await fetchWorkspaceData();
           setSelected([]);
-          setNotice(`Deleted ${res.deleted || selected.length} leads.`);
+          setNotice(
+            isSheetConnected
+              ? `Deleted ${res.deleted || selected.length} leads. Remember to disconnect your Google Sheet if you do not want them re-synced.`
+              : `Deleted ${res.deleted || selected.length} leads.`
+          );
         } catch (err) {
           setNotice(err instanceof Error ? err.message : 'Could not delete selected leads.');
         }
@@ -758,6 +793,81 @@ function App() {
     );
   }, [welcomeRecords, welcomeSearchQuery]);
 
+  useEffect(() => {
+    setCampaignPage(1);
+  }, [campaignSearchQuery, campaignStatusFilter]);
+
+  useEffect(() => {
+    setWelcomePage(1);
+  }, [welcomeSearchQuery]);
+
+  const campaignPageCount = Math.max(1, campaignsPerPage === -1 ? 1 : Math.ceil(filteredCampaigns.length / (campaignsPerPage || 10)));
+  const paginatedCampaigns = useMemo(() => {
+    if (campaignsPerPage === -1) return filteredCampaigns;
+    const start = (campaignPage - 1) * campaignsPerPage;
+    return filteredCampaigns.slice(start, start + campaignsPerPage);
+  }, [filteredCampaigns, campaignPage, campaignsPerPage]);
+
+  const welcomePageCount = Math.max(1, welcomePerPage === -1 ? 1 : Math.ceil(filteredWelcomeRecords.length / (welcomePerPage || 25)));
+  const paginatedWelcomeRecords = useMemo(() => {
+    if (welcomePerPage === -1) return filteredWelcomeRecords;
+    const start = (welcomePage - 1) * welcomePerPage;
+    return filteredWelcomeRecords.slice(start, start + welcomePerPage);
+  }, [filteredWelcomeRecords, welcomePage, welcomePerPage]);
+
+  const recipientCounts = useMemo(() => {
+    let delivered = 0;
+    let failed = 0;
+    let scheduled = 0;
+    for (const r of detailRecipients) {
+      if (r.status === 'delivered' || r.status === 'completed' || r.status === 'sent') delivered++;
+      else if (r.status === 'failed') failed++;
+      else if (r.status === 'scheduled') scheduled++;
+    }
+    return { total: detailRecipients.length, delivered, failed, scheduled };
+  }, [detailRecipients]);
+
+  const filteredCampaignRecipients = useMemo(() => {
+    let result = detailRecipients;
+    if (recipientStatusFilter !== 'all') {
+      result = result.filter(r => {
+        if (recipientStatusFilter === 'delivered') return r.status === 'delivered' || r.status === 'completed' || r.status === 'sent';
+        return r.status === recipientStatusFilter;
+      });
+    }
+    if (!campaignRecipientSearch.trim()) return result;
+    const q = campaignRecipientSearch.toLowerCase().trim();
+    return result.filter(r =>
+      r.email.toLowerCase().includes(q) ||
+      (r.name && r.name.toLowerCase().includes(q)) ||
+      (r.phone && r.phone.toLowerCase().includes(q)) ||
+      (r.company && r.company.toLowerCase().includes(q))
+    );
+  }, [detailRecipients, campaignRecipientSearch, recipientStatusFilter]);
+
+  const campaignRecipientPageCount = Math.max(1, campaignRecipientPerPage === -1 ? 1 : Math.ceil(filteredCampaignRecipients.length / (campaignRecipientPerPage || 25)));
+  const paginatedCampaignRecipients = useMemo(() => {
+    if (campaignRecipientPerPage === -1) return filteredCampaignRecipients;
+    const start = (campaignRecipientPage - 1) * campaignRecipientPerPage;
+    return filteredCampaignRecipients.slice(start, start + campaignRecipientPerPage);
+  }, [filteredCampaignRecipients, campaignRecipientPage, campaignRecipientPerPage]);
+
+  const handleExportCampaignRecipients = (campaignName: string) => {
+    if (!detailRecipients.length) return;
+    const header = 'Email,Name,Phone,Company,Status,Delivered At\n';
+    const rows = detailRecipients.map(r =>
+      `"${r.email.replace(/"/g, '""')}","${(r.name || '').replace(/"/g, '""')}","${(r.phone || '').replace(/^"|"$/g, '').replace(/"/g, '""')}","${(r.company || '').replace(/^"|"$/g, '').replace(/"/g, '""')}","${r.status}","${r.sentAt}"`
+    ).join('\n');
+    const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `${campaignName.replace(/[^a-z0-9_-]/gi, '_')}_recipients.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const handleCopySubject = (subjectText: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
     if (!subjectText) return;
@@ -777,8 +887,64 @@ function App() {
     setNotice(`Loaded campaign settings from "${c.name}".`);
   };
 
+  const compiledCampaignHtml = useMemo(() => {
+    if (!selectedCampaignDetail?.html_source) return '';
+    let html = selectedCampaignDetail.html_source;
+    if (previewPersonalized) {
+      const sample = detailRecipients[0] || { name: 'Soumya Ranjan', email: 'soumya@example.com', phone: '+91 98765 43210', company: 'Titan Algo' };
+      const sampleName = sample.name || 'Valued Client';
+      const sampleEmail = sample.email || 'client@example.com';
+      const samplePhone = sample.phone ? sample.phone.replace(/^"|"$/g, '') : '+91 98765 43210';
+      const sampleCompany = sample.company ? sample.company.replace(/^"|"$/g, '') : 'Enterprise';
+      html = html
+        .replace(/{{\s*name\s*}}/gi, sampleName)
+        .replace(/{{\s*first_name\s*}}/gi, sampleName.split(' ')[0])
+        .replace(/{{\s*email\s*}}/gi, sampleEmail)
+        .replace(/{{\s*phone\s*}}/gi, samplePhone)
+        .replace(/{{\s*company\s*}}/gi, sampleCompany);
+    }
+    return html;
+  }, [selectedCampaignDetail?.html_source, previewPersonalized, detailRecipients]);
+
+  const compiledCampaignSubject = useMemo(() => {
+    if (!selectedCampaignDetail?.subject) return '';
+    let subj = selectedCampaignDetail.subject;
+    if (previewPersonalized) {
+      const sample = detailRecipients[0] || { name: 'Soumya Ranjan' };
+      const sampleName = sample.name || 'Valued Client';
+      subj = subj
+        .replace(/{{\s*name\s*}}/gi, sampleName)
+        .replace(/{{\s*first_name\s*}}/gi, sampleName.split(' ')[0]);
+    }
+    return subj;
+  }, [selectedCampaignDetail?.subject, previewPersonalized, detailRecipients]);
+
   const handleInspectCampaign = (c: any) => {
     setSelectedCampaignDetail(c);
+    setCampaignModalTab('template');
+    setRecipientStatusFilter('all');
+    setCampaignRecipientSearch('');
+    setCampaignRecipientPage(1);
+    setDetailRecipients([]);
+    setLoadingDetailRecipients(true);
+    campaignsApi.recipients(c.id)
+      .then(res => {
+        setDetailRecipients(res.recipients || []);
+        if (res.campaign) {
+          setSelectedCampaignDetail((prev: any) => ({
+            ...prev,
+            ...res.campaign,
+            html_source: res.campaign?.html_source || prev?.html_source
+          }));
+        }
+      })
+      .catch(err => {
+        console.error('Failed to load campaign recipients:', err);
+        setDetailRecipients([]);
+      })
+      .finally(() => {
+        setLoadingDetailRecipients(false);
+      });
   };
 
   const handleRefreshCampaigns = async () => {
@@ -2197,7 +2363,7 @@ function App() {
                   </div>
                 </div>
 
-                <div className="table-wrap">
+                <div className="table-wrap campaign-table-container">
                   <table className="campaign-modern-table">
                     <thead>
                       <tr>
@@ -2209,7 +2375,7 @@ function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredCampaigns.map(c => {
+                      {paginatedCampaigns.map(c => {
                         const dateDisplay = c.scheduled_at ? c.scheduled_at : c.created_at;
                         const matchedTemplate = c.template_id ? templates.find(t => t.id === c.template_id) : null;
 
@@ -2271,10 +2437,10 @@ function App() {
                               <div className="campaign-row-actions" onClick={e => e.stopPropagation()}>
                                 <button
                                   className="campaign-view-button"
-                                  title="View campaign details"
+                                  title="View campaign recipients and audit logs"
                                   onClick={() => handleInspectCampaign(c)}
                                 >
-                                  View
+                                  <Users size={12} /> View ({c.recipient_count})
                                 </button>
                               </div>
                             </td>
@@ -2318,6 +2484,66 @@ function App() {
                     </div>
                   )}
                 </div>
+
+                {/* Broadcast Campaigns Table Pagination Footer */}
+                {filteredCampaigns.length > 0 && (
+                  <div className="campaign-table-footer">
+                    <div className="campaign-footer-left">
+                      <span>
+                        Showing{' '}
+                        <b>
+                          {filteredCampaigns.length
+                            ? (campaignPage - 1) * (campaignsPerPage === -1 ? filteredCampaigns.length : campaignsPerPage) + 1
+                            : 0}
+                          –
+                          {campaignsPerPage === -1
+                            ? filteredCampaigns.length
+                            : Math.min(campaignPage * campaignsPerPage, filteredCampaigns.length)}
+                        </b>{' '}
+                        of <b>{filteredCampaigns.length}</b> campaigns
+                        {recentCampaigns.length !== filteredCampaigns.length && ` (filtered from ${recentCampaigns.length} total)`}
+                      </span>
+                      <div className="campaign-page-size-selector">
+                        <span>Per page:</span>
+                        <select
+                          className="campaign-page-size-select"
+                          value={campaignsPerPage}
+                          onChange={e => {
+                            setCampaignsPerPage(Number(e.target.value));
+                            setCampaignPage(1);
+                          }}
+                        >
+                          <option value={10}>10</option>
+                          <option value={25}>25</option>
+                          <option value={50}>50</option>
+                          <option value={-1}>All</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="campaign-footer-right">
+                      <button
+                        className="campaign-pagination-btn"
+                        disabled={campaignPage <= 1}
+                        onClick={() => setCampaignPage(p => Math.max(1, p - 1))}
+                        aria-label="Previous page"
+                      >
+                        <ChevronLeft size={14} /> Prev
+                      </button>
+                      <span className="campaign-page-indicator">
+                        Page {campaignPage} of {campaignPageCount}
+                      </span>
+                      <button
+                        className="campaign-pagination-btn"
+                        disabled={campaignPage >= campaignPageCount}
+                        onClick={() => setCampaignPage(p => Math.min(campaignPageCount, p + 1))}
+                        aria-label="Next page"
+                      >
+                        Next <ChevronRight size={14} />
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               /* Automated Welcome Emails Audit Table Card */
@@ -2364,7 +2590,7 @@ function App() {
                   </div>
                 </div>
 
-                <div className="table-wrap">
+                <div className="table-wrap campaign-table-container">
                   <table className="campaign-modern-table">
                     <thead>
                       <tr>
@@ -2375,7 +2601,7 @@ function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredWelcomeRecords.map(w => (
+                      {paginatedWelcomeRecords.map(w => (
                         <tr key={w.id} className="campaign-row">
                           <td>
                             <div className="welcome-recipient-cell">
@@ -2444,6 +2670,66 @@ function App() {
                     </div>
                   )}
                 </div>
+
+                {/* Welcome Emails Table Pagination Footer */}
+                {filteredWelcomeRecords.length > 0 && (
+                  <div className="campaign-table-footer">
+                    <div className="campaign-footer-left">
+                      <span>
+                        Showing{' '}
+                        <b>
+                          {filteredWelcomeRecords.length
+                            ? (welcomePage - 1) * (welcomePerPage === -1 ? filteredWelcomeRecords.length : welcomePerPage) + 1
+                            : 0}
+                          –
+                          {welcomePerPage === -1
+                            ? filteredWelcomeRecords.length
+                            : Math.min(welcomePage * welcomePerPage, filteredWelcomeRecords.length)}
+                        </b>{' '}
+                        of <b>{filteredWelcomeRecords.length}</b> records
+                        <span className="welcome-lifetime-counter">({welcomeTotalSent} lifetime sent)</span>
+                      </span>
+                      <div className="campaign-page-size-selector">
+                        <span>Per page:</span>
+                        <select
+                          className="campaign-page-size-select"
+                          value={welcomePerPage}
+                          onChange={e => {
+                            setWelcomePerPage(Number(e.target.value));
+                            setWelcomePage(1);
+                          }}
+                        >
+                          <option value={25}>25</option>
+                          <option value={50}>50</option>
+                          <option value={100}>100</option>
+                          <option value={-1}>All</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="campaign-footer-right">
+                      <button
+                        className="campaign-pagination-btn"
+                        disabled={welcomePage <= 1}
+                        onClick={() => setWelcomePage(p => Math.max(1, p - 1))}
+                        aria-label="Previous page"
+                      >
+                        <ChevronLeft size={14} /> Prev
+                      </button>
+                      <span className="campaign-page-indicator">
+                        Page {welcomePage} of {welcomePageCount}
+                      </span>
+                      <button
+                        className="campaign-pagination-btn"
+                        disabled={welcomePage >= welcomePageCount}
+                        onClick={() => setWelcomePage(p => Math.min(welcomePageCount, p + 1))}
+                        aria-label="Next page"
+                      >
+                        Next <ChevronRight size={14} />
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </section>
@@ -2948,117 +3234,546 @@ function App() {
           }}
         >
           <div className="modal campaign-detail-modal">
-            <div className="modal-head">
-              <div>
+            {/* Spacious Header with Metadata */}
+            <div className="modal-head campaign-modal-header">
+              <div className="campaign-modal-title-area">
                 <span className={`modal-icon ${selectedCampaignDetail.status === 'completed' ? 'mint' : selectedCampaignDetail.status === 'scheduled' ? 'blue' : 'amber'}`}>
-                  {selectedCampaignDetail.status === 'scheduled' ? <CalendarDays size={18} /> : <Send size={18} />}
+                  {selectedCampaignDetail.status === 'scheduled' ? <CalendarDays size={20} /> : <Send size={20} />}
                 </span>
-                <h2>{selectedCampaignDetail.name}</h2>
-                <p>Outreach Job · <code className="campaign-id-code">{selectedCampaignDetail.id.slice(0, 8)}...</code></p>
+                <div className="campaign-modal-title-content">
+                  <div className="campaign-modal-title-row">
+                    <h2>{selectedCampaignDetail.name}</h2>
+                    <span className={`apple-status-badge ${selectedCampaignDetail.status === 'completed' ? 'completed' : selectedCampaignDetail.status === 'scheduled' ? 'scheduled' : selectedCampaignDetail.status}`}>
+                      <span className="status-dot" />
+                      {selectedCampaignDetail.status === 'completed' ? 'Delivered' : selectedCampaignDetail.status === 'scheduled' ? 'Scheduled Send' : selectedCampaignDetail.status}
+                    </span>
+                  </div>
+                  <p className="campaign-modal-subtitle">
+                    <span>Campaign ID: <code className="campaign-id-code">{selectedCampaignDetail.id.slice(0, 8)}...</code></span>
+                    <span className="bullet-sep">•</span>
+                    <span><b>{selectedCampaignDetail.recipient_count} targeted leads</b></span>
+                    <span className="bullet-sep">•</span>
+                    <span className="campaign-detail-timestamp">
+                      <Clock size={12} /> {selectedCampaignDetail.scheduled_at ? `Scheduled for ${formatCampaignDate(selectedCampaignDetail.scheduled_at)}` : `Sent on ${formatCampaignDate(selectedCampaignDetail.created_at)}`}
+                    </span>
+                  </p>
+                </div>
               </div>
               <button
                 className="close-modal"
                 onClick={() => setSelectedCampaignDetail(null)}
                 aria-label="Close dialog"
               >
-                <X size={17} />
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal Navigation Tabs */}
+            <div className="campaign-modal-tabs">
+              <button
+                type="button"
+                className={`campaign-modal-tab-btn ${campaignModalTab === 'template' ? 'active' : ''}`}
+                onClick={() => setCampaignModalTab('template')}
+              >
+                <LayoutTemplate size={15} />
+                <span>Email Template Preview</span>
+              </button>
+              <button
+                type="button"
+                className={`campaign-modal-tab-btn ${campaignModalTab === 'recipients' ? 'active' : ''}`}
+                onClick={() => setCampaignModalTab('recipients')}
+              >
+                <Users size={15} />
+                <span>Recipients &amp; Users</span>
+                <span className="tab-badge-pill">
+                  {loadingDetailRecipients ? '...' : (detailRecipients.length || selectedCampaignDetail.recipient_count)}
+                </span>
+              </button>
+              <button
+                type="button"
+                className={`campaign-modal-tab-btn ${campaignModalTab === 'overview' ? 'active' : ''}`}
+                onClick={() => setCampaignModalTab('overview')}
+              >
+                <Activity size={15} />
+                <span>Stats &amp; Config</span>
               </button>
             </div>
 
             <div className="campaign-detail-body">
-              {/* Top Quick Status Pill */}
-              <div className="campaign-detail-status-strip">
-                <span className={`campaign-status-pill ${selectedCampaignDetail.status}`}>
-                  <i /> {selectedCampaignDetail.status === 'completed' ? 'Delivered' : selectedCampaignDetail.status === 'scheduled' ? 'Scheduled Send' : selectedCampaignDetail.status}
-                </span>
-                <span className="campaign-detail-timestamp">
-                  <Clock size={12} /> {selectedCampaignDetail.scheduled_at ? `Scheduled for ${formatCampaignDate(selectedCampaignDetail.scheduled_at)}` : `Sent on ${formatCampaignDate(selectedCampaignDetail.created_at)}`}
-                </span>
-              </div>
+              {campaignModalTab === 'template' ? (
+                /* EMAIL TEMPLATE PREVIEW VIEW */
+                <div className="campaign-modal-template-view">
+                  {/* Template Toolbar */}
+                  <div className="campaign-template-toolbar">
+                    <div className="template-toolbar-subject">
+                      <span className="template-subject-label">Subject:</span>
+                      <span className="template-subject-value" title={compiledCampaignSubject || selectedCampaignDetail.subject}>
+                        {compiledCampaignSubject || selectedCampaignDetail.subject || '(No subject provided)'}
+                      </span>
+                      {selectedCampaignDetail.subject && (
+                        <button
+                          type="button"
+                          className="button secondary button-sm copy-subject-btn"
+                          onClick={e => handleCopySubject(selectedCampaignDetail.subject, e)}
+                          title="Copy subject line"
+                        >
+                          <Copy size={12} /> Copy
+                        </button>
+                      )}
+                    </div>
 
-              {/* 4 Stat Metric Tiles */}
-              <div className="campaign-detail-stats">
-                <div className="detail-stat-tile">
-                  <span>Recipients</span>
-                  <b>{selectedCampaignDetail.recipient_count}</b>
-                  <small>Targeted leads</small>
-                </div>
-                <div className="detail-stat-tile">
-                  <span>Delivered</span>
-                  <b>{selectedCampaignDetail.sent_count}</b>
-                  <small>Outreach emails</small>
-                </div>
-                <div className="detail-stat-tile">
-                  <span>Completion</span>
-                  <b>{selectedCampaignDetail.recipient_count > 0 ? `${Math.round((selectedCampaignDetail.sent_count / selectedCampaignDetail.recipient_count) * 100)}%` : '100%'}</b>
-                  <small>ZeptoMail verified</small>
-                </div>
-                <div className="detail-stat-tile">
-                  <span>Suppression</span>
-                  <b>Safe</b>
-                  <small>Auto protected</small>
-                </div>
-              </div>
+                    <div className="template-toolbar-controls">
+                      {/* Personalize Toggle */}
+                      <button
+                        type="button"
+                        className={`template-toggle-btn ${previewPersonalized ? 'active' : ''}`}
+                        onClick={() => setPreviewPersonalized(!previewPersonalized)}
+                        title="Toggle sample lead data replacement"
+                      >
+                        <Sparkles size={13} />
+                        <span>{previewPersonalized ? `Sample: ${detailRecipients[0]?.name || 'Soumya'}` : 'Raw {{name}}'}</span>
+                      </button>
 
-              {/* Subject box */}
-              <div className="campaign-detail-section">
-                <label>EMAIL SUBJECT</label>
-                <div className="campaign-subject-box">
-                  <span>{selectedCampaignDetail.subject || 'No subject provided'}</span>
-                  {selectedCampaignDetail.subject && (
-                    <button
-                      className="button secondary button-sm"
-                      onClick={e => handleCopySubject(selectedCampaignDetail.subject, e)}
-                    >
-                      <Copy size={12} /> Copy
-                    </button>
-                  )}
-                </div>
-              </div>
+                      {/* Device Switcher */}
+                      <div className="template-device-group">
+                        <button
+                          type="button"
+                          className={`device-toggle-btn ${previewDevice === 'desktop' ? 'active' : ''}`}
+                          onClick={() => setPreviewDevice('desktop')}
+                          title="Desktop email view"
+                        >
+                          <Monitor size={13} />
+                          <span>Desktop</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`device-toggle-btn ${previewDevice === 'mobile' ? 'active' : ''}`}
+                          onClick={() => setPreviewDevice('mobile')}
+                          title="Mobile phone view"
+                        >
+                          <Smartphone size={13} />
+                          <span>Mobile</span>
+                        </button>
+                      </div>
 
-              {/* Delivery Pipeline Intelligence */}
-              <div className="campaign-detail-section">
-                <label>DELIVERY CONFIGURATION</label>
-                <div className="campaign-config-card">
-                  <div className="config-row">
-                    <span>Dispatch Service</span>
-                    <b>ZeptoMail Transactional API</b>
+                      {/* External Tab */}
+                      {compiledCampaignHtml && (
+                        <button
+                          type="button"
+                          className="button secondary button-sm new-tab-btn"
+                          onClick={() => {
+                            const w = window.open();
+                            w?.document.write(compiledCampaignHtml);
+                            w?.document.close();
+                          }}
+                          title="Open preview in new tab"
+                        >
+                          <ExternalLink size={13} />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="config-row">
-                    <span>Suppression Check</span>
-                    <b className="text-mint"><CheckCircle2 size={12} /> Filtered &amp; Protected</b>
+
+                  {/* Template Viewport */}
+                  <div className="campaign-template-viewport-wrap">
+                    <div className={`campaign-template-frame ${previewDevice === 'mobile' ? 'is-mobile' : 'is-desktop'}`}>
+                      {/* Email Client Header bar */}
+                      <div className="email-client-header">
+                        <div className="email-client-dots">
+                          <span className="dot red" />
+                          <span className="dot amber" />
+                          <span className="dot green" />
+                        </div>
+                        <div className="email-client-meta">
+                          <span>To: <b>{detailRecipients[0]?.email || 'recipient@lead.com'}</b></span>
+                          <span className="meta-sep">•</span>
+                          <span>From: <b>ZeptoMail Verified Sender</b></span>
+                        </div>
+                      </div>
+
+                      {/* Sandbox iframe */}
+                      {compiledCampaignHtml ? (
+                        <iframe
+                          title="Campaign Email Template Preview"
+                          srcDoc={compiledCampaignHtml}
+                          sandbox="allow-same-origin"
+                          className="campaign-template-iframe"
+                        />
+                      ) : (
+                        <div className="campaign-template-empty">
+                          <LayoutTemplate size={36} className="text-muted" />
+                          <h4>No HTML template stored</h4>
+                          <p>The message body for this campaign was sent without a saved HTML body.</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  {selectedCampaignDetail.scheduled_at && (
-                    <div className="config-row">
-                      <span>Scheduled Send Time</span>
-                      <b>{formatCampaignDate(selectedCampaignDetail.scheduled_at)}</b>
+                </div>
+              ) : campaignModalTab === 'recipients' ? (
+                /* RECIPIENTS VIEW */
+                <div className="campaign-modal-recipients-view">
+                  {/* Toolbar */}
+                  <div className="campaign-recipients-toolbar">
+                    <div className="campaign-recipients-toolbar-left">
+                      <div className="searchbox campaign-recipient-search">
+                        <Search size={14} />
+                        <input
+                          type="text"
+                          placeholder="Search recipients by email, name, phone, or company..."
+                          value={campaignRecipientSearch}
+                          onChange={e => {
+                            setCampaignRecipientSearch(e.target.value);
+                            setCampaignRecipientPage(1);
+                          }}
+                        />
+                        {campaignRecipientSearch && (
+                          <button
+                            type="button"
+                            className="clear-search-btn"
+                            onClick={() => {
+                              setCampaignRecipientSearch('');
+                              setCampaignRecipientPage(1);
+                            }}
+                            aria-label="Clear search"
+                          >
+                            <X size={12} />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Filter Chips */}
+                      <div className="recipient-filter-chips">
+                        <button
+                          type="button"
+                          className={`recipient-filter-chip ${recipientStatusFilter === 'all' ? 'active' : ''}`}
+                          onClick={() => { setRecipientStatusFilter('all'); setCampaignRecipientPage(1); }}
+                        >
+                          All ({detailRecipients.length || selectedCampaignDetail.recipient_count})
+                        </button>
+                        <button
+                          type="button"
+                          className={`recipient-filter-chip ${recipientStatusFilter === 'delivered' ? 'active' : ''}`}
+                          onClick={() => { setRecipientStatusFilter('delivered'); setCampaignRecipientPage(1); }}
+                        >
+                          <span className="chip-dot mint" /> Delivered ({recipientCounts.delivered || selectedCampaignDetail.sent_count})
+                        </button>
+                        {recipientCounts.failed > 0 && (
+                          <button
+                            type="button"
+                            className={`recipient-filter-chip ${recipientStatusFilter === 'failed' ? 'active' : ''}`}
+                            onClick={() => { setRecipientStatusFilter('failed'); setCampaignRecipientPage(1); }}
+                          >
+                            <span className="chip-dot red" /> Failed ({recipientCounts.failed})
+                          </button>
+                        )}
+                        {recipientCounts.scheduled > 0 && (
+                          <button
+                            type="button"
+                            className={`recipient-filter-chip ${recipientStatusFilter === 'scheduled' ? 'active' : ''}`}
+                            onClick={() => { setRecipientStatusFilter('scheduled'); setCampaignRecipientPage(1); }}
+                          >
+                            <span className="chip-dot blue" /> Scheduled ({recipientCounts.scheduled})
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="campaign-recipients-toolbar-right">
+                      {detailRecipients.length > 0 && (
+                        <button
+                          type="button"
+                          className="button secondary button-sm export-recipients-btn"
+                          title="Export recipients to CSV"
+                          onClick={() => handleExportCampaignRecipients(selectedCampaignDetail.name)}
+                        >
+                          <Download size={13} /> Export CSV
+                        </button>
+                      )}
+                      <span className="recipient-count-text">
+                        Showing <b>{filteredCampaignRecipients.length}</b> of {detailRecipients.length || selectedCampaignDetail.recipient_count}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Recipients Table Wrap */}
+                  <div className="campaign-modal-table-wrap">
+                    {loadingDetailRecipients ? (
+                      <div className="campaign-recipients-loading">
+                        <Loader2 size={26} className="spin-animate" />
+                        <p>Loading recipient leads &amp; delivery statuses...</p>
+                      </div>
+                    ) : filteredCampaignRecipients.length > 0 ? (
+                      <table className="campaign-modal-table">
+                        <thead>
+                          <tr>
+                            <th style={{ width: '36%' }}>RECIPIENT</th>
+                            <th style={{ width: '26%' }}>CONTACT INFO</th>
+                            <th style={{ width: '18%' }}>DELIVERY STATUS</th>
+                            <th style={{ width: '20%' }}>DELIVERED AT</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {paginatedCampaignRecipients.map((r, idx) => {
+                            const initial = (r.name ? r.name.charAt(0) : r.email.charAt(0)).toUpperCase();
+                            const cleanPhone = r.phone ? r.phone.replace(/^"|"$/g, '').trim() : '';
+                            const cleanCompany = r.company ? r.company.replace(/^"|"$/g, '').trim() : '';
+                            return (
+                              <tr key={`${r.email}-${idx}`} className="recipient-row">
+                                <td>
+                                  <div className="recipient-user-cell">
+                                    <span className="recipient-user-avatar">
+                                      {initial}
+                                    </span>
+                                    <div className="recipient-user-text">
+                                      <span className="recipient-user-name">
+                                        {r.name || r.email.split('@')[0]}
+                                      </span>
+                                      <span className="recipient-user-email" title={r.email}>
+                                        {r.email}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td>
+                                  <div className="recipient-contact-info">
+                                    {cleanPhone ? (
+                                      <span className="recipient-chip phone" title={cleanPhone}>
+                                        <Phone size={11} /> {cleanPhone}
+                                      </span>
+                                    ) : (
+                                      <span className="text-muted">–</span>
+                                    )}
+                                    {cleanCompany && (
+                                      <span className="recipient-chip company" title={cleanCompany}>
+                                        <Building2 size={11} /> {cleanCompany}
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td>
+                                  <span className={`apple-status-badge ${r.status === 'delivered' ? 'completed' : r.status === 'scheduled' ? 'scheduled' : r.status === 'failed' ? 'failed' : 'sending'}`}>
+                                    <span className="status-dot" />
+                                    {r.status === 'delivered' ? 'Delivered' : r.status === 'scheduled' ? 'Scheduled' : r.status === 'suppressed' ? 'Suppressed' : r.status === 'failed' ? 'Failed' : r.status}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span className="campaign-date-text">
+                                    <Clock size={11} style={{ marginRight: 4, opacity: 0.6 }} />
+                                    {formatCampaignDate(r.sentAt)}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    ) : (
+                      <div className="campaign-recipients-empty">
+                        <Users size={28} className="text-muted" />
+                        <p>{campaignRecipientSearch || recipientStatusFilter !== 'all' ? 'No recipients match your search or filter.' : 'No recipient records found for this campaign.'}</p>
+                        {(campaignRecipientSearch || recipientStatusFilter !== 'all') && (
+                          <button
+                            type="button"
+                            className="button secondary button-sm"
+                            onClick={() => {
+                              setCampaignRecipientSearch('');
+                              setRecipientStatusFilter('all');
+                            }}
+                          >
+                            Clear filters
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Recipient Table Pagination Footer */}
+                  {filteredCampaignRecipients.length > 0 && (
+                    <div className="campaign-table-footer modal-pagination">
+                      <div className="campaign-footer-left">
+                        <span>
+                          Showing{' '}
+                          <b>
+                            {(campaignRecipientPage - 1) * (campaignRecipientPerPage === -1 ? filteredCampaignRecipients.length : campaignRecipientPerPage) + 1}
+                            –
+                            {campaignRecipientPerPage === -1
+                              ? filteredCampaignRecipients.length
+                              : Math.min(campaignRecipientPage * campaignRecipientPerPage, filteredCampaignRecipients.length)}
+                          </b>{' '}
+                          of <b>{filteredCampaignRecipients.length}</b> recipients
+                          {detailRecipients.length !== filteredCampaignRecipients.length && ` (filtered from ${detailRecipients.length} total)`}
+                        </span>
+                        <div className="campaign-page-size-selector">
+                          <span>Per page:</span>
+                          <select
+                            className="campaign-page-size-select"
+                            value={campaignRecipientPerPage}
+                            onChange={e => {
+                              setCampaignRecipientPerPage(Number(e.target.value));
+                              setCampaignRecipientPage(1);
+                            }}
+                          >
+                            <option value={25}>25</option>
+                            <option value={50}>50</option>
+                            <option value={100}>100</option>
+                            <option value={-1}>All</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="campaign-footer-right">
+                        <button
+                          type="button"
+                          className="campaign-pagination-btn"
+                          disabled={campaignRecipientPage <= 1}
+                          onClick={() => setCampaignRecipientPage(p => Math.max(1, p - 1))}
+                          aria-label="Previous page"
+                        >
+                          <ChevronLeft size={14} /> Prev
+                        </button>
+                        <span className="campaign-page-indicator">
+                          Page {campaignRecipientPage} of {campaignRecipientPageCount}
+                        </span>
+                        <button
+                          type="button"
+                          className="campaign-pagination-btn"
+                          disabled={campaignRecipientPage >= campaignRecipientPageCount}
+                          onClick={() => setCampaignRecipientPage(p => Math.min(campaignRecipientPageCount, p + 1))}
+                          aria-label="Next page"
+                        >
+                          Next <ChevronRight size={14} />
+                        </button>
+                      </div>
                     </div>
                   )}
-                  <div className="config-row">
-                    <span>Created Timestamp</span>
-                    <b>{formatCampaignDate(selectedCampaignDetail.created_at)}</b>
+                </div>
+              ) : (
+                /* STATS & CONFIG VIEW */
+                <div className="campaign-modal-overview-view">
+                  {/* 4 Stat Metric Tiles */}
+                  <div className="campaign-detail-stats">
+                    <div className="detail-stat-tile">
+                      <span>Recipients</span>
+                      <b>{selectedCampaignDetail.recipient_count}</b>
+                      <small>Targeted leads</small>
+                    </div>
+                    <div className="detail-stat-tile">
+                      <span>Delivered</span>
+                      <b>{selectedCampaignDetail.sent_count}</b>
+                      <small>Outreach emails</small>
+                    </div>
+                    <div className="detail-stat-tile">
+                      <span>Completion</span>
+                      <b>{selectedCampaignDetail.recipient_count > 0 ? `${Math.round((selectedCampaignDetail.sent_count / selectedCampaignDetail.recipient_count) * 100)}%` : '100%'}</b>
+                      <small>ZeptoMail verified</small>
+                    </div>
+                    <div className="detail-stat-tile">
+                      <span>Suppression</span>
+                      <b>Safe</b>
+                      <small>Auto protected</small>
+                    </div>
+                  </div>
+
+                  {/* Subject box */}
+                  <div className="campaign-detail-section">
+                    <label>EMAIL SUBJECT</label>
+                    <div className="campaign-subject-box">
+                      <span>{selectedCampaignDetail.subject || 'No subject provided'}</span>
+                      {selectedCampaignDetail.subject && (
+                        <button
+                          type="button"
+                          className="button secondary button-sm"
+                          onClick={e => handleCopySubject(selectedCampaignDetail.subject, e)}
+                        >
+                          <Copy size={12} /> Copy
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Rendered Template Preview inside Overview */}
+                  <div className="campaign-detail-section">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <label style={{ margin: 0 }}>EMAIL TEMPLATE DESIGN</label>
+                      <button
+                        type="button"
+                        className="button secondary button-sm"
+                        onClick={() => setCampaignModalTab('template')}
+                        style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                      >
+                        <LayoutTemplate size={12} /> Full Interactive View
+                      </button>
+                    </div>
+                    {selectedCampaignDetail.html_source ? (
+                      <div className="campaign-overview-template-preview">
+                        <iframe
+                          className="overview-template-iframe"
+                          srcDoc={compiledCampaignHtml || selectedCampaignDetail.html_source}
+                          title="Campaign Email Template Preview"
+                          sandbox="allow-same-origin"
+                        />
+                      </div>
+                    ) : (
+                      <div className="campaign-no-template-notice">
+                        <span>No visual template stored for this campaign.</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Delivery Pipeline Intelligence */}
+                  <div className="campaign-detail-section">
+                    <label>DELIVERY CONFIGURATION</label>
+                    <div className="campaign-config-card">
+                      <div className="config-row">
+                        <span>Dispatch Service</span>
+                        <b>ZeptoMail Transactional API</b>
+                      </div>
+                      <div className="config-row">
+                        <span>Suppression Check</span>
+                        <b className="text-mint"><CheckCircle2 size={12} /> Filtered &amp; Protected</b>
+                      </div>
+                      {selectedCampaignDetail.scheduled_at && (
+                        <div className="config-row">
+                          <span>Scheduled Send Time</span>
+                          <b>{formatCampaignDate(selectedCampaignDetail.scheduled_at)}</b>
+                        </div>
+                      )}
+                      <div className="config-row">
+                        <span>Created Timestamp</span>
+                        <b>{formatCampaignDate(selectedCampaignDetail.created_at)}</b>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
             </div>
 
-            <div className="modal-footer">
-              <button
-                className="button secondary"
-                onClick={() => setSelectedCampaignDetail(null)}
-              >
-                Close
-              </button>
-              <button
-                className="button primary"
-                onClick={() => {
-                  const c = selectedCampaignDetail;
-                  setSelectedCampaignDetail(null);
-                  handleDuplicateCampaign(c);
-                }}
-              >
-                <Copy size={14} /> Duplicate as new campaign
-              </button>
+            <div className="modal-footer campaign-modal-footer">
+              <div className="modal-footer-info">
+                <span className="text-mint">
+                  <CheckCircle2 size={14} /> Dispatched via ZeptoMail Transactional API
+                </span>
+              </div>
+              <div className="modal-footer-actions">
+                <button
+                  type="button"
+                  className="button secondary"
+                  onClick={() => setSelectedCampaignDetail(null)}
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  className="button primary"
+                  onClick={() => {
+                    const c = selectedCampaignDetail;
+                    setSelectedCampaignDetail(null);
+                    handleDuplicateCampaign(c);
+                  }}
+                >
+                  <Copy size={14} /> Duplicate as new campaign
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -3808,7 +4523,7 @@ function App() {
               </div>
             </div>
 
-            <p style={{ margin: '0 0 20px', color: '#64748b', fontSize: '0.875rem', lineHeight: 1.5 }}>
+            <p style={{ margin: '0 0 20px', color: '#64748b', fontSize: '0.875rem', lineHeight: 1.55, whiteSpace: 'pre-line' }}>
               {confirmDialog.message}
             </p>
 

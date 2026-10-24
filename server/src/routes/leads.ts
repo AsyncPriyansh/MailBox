@@ -27,22 +27,33 @@ export async function registerLeadRoutes(app: FastifyInstance) {
   app.delete('/v1/leads/all', async (req, reply) => {
     if (!supabase) return reply.code(503).send({ error: 'Supabase is not configured.' });
     try {
-      // 1. Record tombstone for all deleted contacts to avoid background re-import
-      const { data: contactsToDelete } = await supabase
-        .from('contacts')
-        .select('primary_email')
-        .eq('workspace_id', req.workspaceId);
+      // 1. Record tombstone for all deleted contacts to avoid background re-import (paginated to handle >1000 contacts)
+      const contactsToDelete: Array<{ primary_email: string }> = [];
+      const pageSize = 1000;
+      for (let from = 0; ; from += pageSize) {
+        const { data, error: fetchErr } = await supabase
+          .from('contacts')
+          .select('primary_email')
+          .eq('workspace_id', req.workspaceId)
+          .range(from, from + pageSize - 1);
+        if (fetchErr) throw fetchErr;
+        if (data) contactsToDelete.push(...data);
+        if (!data || data.length < pageSize) break;
+      }
 
-      if (contactsToDelete && contactsToDelete.length > 0) {
-        const events = contactsToDelete.map(c => ({
-          workspace_id: req.workspaceId,
-          campaign_id: null,
-          email: c.primary_email,
-          event_type: 'lead_deleted',
-          event_data: { deleted_at: new Date().toISOString() }
-        }));
+      if (contactsToDelete.length > 0) {
+        const events = contactsToDelete
+          .filter(c => Boolean(c.primary_email))
+          .map(c => ({
+            workspace_id: req.workspaceId,
+            campaign_id: null,
+            email: String(c.primary_email).trim().toLowerCase(),
+            event_type: 'lead_deleted',
+            event_data: { deleted_at: new Date().toISOString() }
+          }));
         for (let i = 0; i < events.length; i += 500) {
-          await supabase.from('email_events').insert(events.slice(i, i + 500));
+          const { error: insertErr } = await supabase.from('email_events').insert(events.slice(i, i + 500));
+          if (insertErr) req.log.error(insertErr, 'Failed recording lead_deleted events in bulk');
         }
       }
 
@@ -74,32 +85,51 @@ export async function registerLeadRoutes(app: FastifyInstance) {
     const parsed = bulkDeleteSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid lead IDs for deletion.' });
     try {
-      // 1. Record tombstone for deleted contacts to avoid background re-import
-      const { data: contactsToDelete } = await supabase
-        .from('contacts')
-        .select('primary_email')
-        .eq('workspace_id', req.workspaceId)
-        .in('id', parsed.data.ids);
+      // 1. Record tombstone for deleted contacts in chunks to avoid URL size/limit issues
+      const contactsToDelete: Array<{ primary_email: string }> = [];
+      const chunkSize = 500;
+      for (let i = 0; i < parsed.data.ids.length; i += chunkSize) {
+        const chunk = parsed.data.ids.slice(i, i + chunkSize);
+        const { data, error: fetchErr } = await supabase
+          .from('contacts')
+          .select('primary_email')
+          .eq('workspace_id', req.workspaceId)
+          .in('id', chunk);
+        if (fetchErr) throw fetchErr;
+        if (data) contactsToDelete.push(...data);
+      }
 
-      if (contactsToDelete && contactsToDelete.length > 0) {
-        const events = contactsToDelete.map(c => ({
-          workspace_id: req.workspaceId,
-          campaign_id: null,
-          email: c.primary_email,
-          event_type: 'lead_deleted',
-          event_data: { deleted_at: new Date().toISOString() }
-        }));
+      if (contactsToDelete.length > 0) {
+        const events = contactsToDelete
+          .filter(c => Boolean(c.primary_email))
+          .map(c => ({
+            workspace_id: req.workspaceId,
+            campaign_id: null,
+            email: String(c.primary_email).trim().toLowerCase(),
+            event_type: 'lead_deleted',
+            event_data: { deleted_at: new Date().toISOString() }
+          }));
         for (let i = 0; i < events.length; i += 500) {
-          await supabase.from('email_events').insert(events.slice(i, i + 500));
+          const { error: insertErr } = await supabase.from('email_events').insert(events.slice(i, i + 500));
+          if (insertErr) req.log.error(insertErr, 'Failed recording lead_deleted events');
         }
       }
 
-      // 2. Remove associated email jobs
-      await supabase.from('email_jobs').delete().eq('workspace_id', req.workspaceId).in('contact_id', parsed.data.ids);
-      // 3. Delete contacts
-      const { data, error, count } = await supabase.from('contacts').delete({ count: 'exact' }).eq('workspace_id', req.workspaceId).in('id', parsed.data.ids).select('id');
-      if (error) throw error;
-      return { deleted: count ?? (data?.length || 0) };
+      // 2. Remove associated email jobs in chunks
+      for (let i = 0; i < parsed.data.ids.length; i += chunkSize) {
+        const chunk = parsed.data.ids.slice(i, i + chunkSize);
+        await supabase.from('email_jobs').delete().eq('workspace_id', req.workspaceId).in('contact_id', chunk);
+      }
+
+      // 3. Delete contacts in chunks
+      let totalDeleted = 0;
+      for (let i = 0; i < parsed.data.ids.length; i += chunkSize) {
+        const chunk = parsed.data.ids.slice(i, i + chunkSize);
+        const { data, error, count } = await supabase.from('contacts').delete({ count: 'exact' }).eq('workspace_id', req.workspaceId).in('id', chunk).select('id');
+        if (error) throw error;
+        totalDeleted += count ?? (data?.length || 0);
+      }
+      return { deleted: totalDeleted };
     } catch (error) {
       req.log.error(error, 'Failed to delete selected leads');
       return reply.code(400).send({ error: error instanceof Error ? error.message : 'Could not delete selected leads.' });

@@ -70,32 +70,12 @@ export async function upsertLeads(rows: Array<Record<string, unknown>>, workspac
   }
   const data = [...uniqueByEmail.values()];
   if (!data.length) return { imported: 0 };
-  const emails = data.map(r => r.primary_email);
 
-  // Guard 1: Filter out leads previously deleted by the user
-  const deletedSet = new Set<string>();
-  const chunkLimit = 500;
-  for (let offset = 0; offset < emails.length; offset += chunkLimit) {
-    const chunk = emails.slice(offset, offset + chunkLimit);
-    const { data: deletedEvents } = await supabase
-      .from('email_events')
-      .select('email')
-      .eq('workspace_id', id)
-      .eq('event_type', 'lead_deleted')
-      .in('email', chunk);
-    if (deletedEvents) {
-      for (const d of deletedEvents) deletedSet.add(String(d.email).toLowerCase());
-    }
-  }
-
-  const rowsToProcess = data.filter(r => !deletedSet.has(r.primary_email.toLowerCase()));
-  if (!rowsToProcess.length) return { imported: 0 };
-
-  const emailsToSave = rowsToProcess.map(r => r.primary_email);
+  const emailsToSave = data.map(r => r.primary_email);
   const { data: existing, error: readError } = await supabase.from('contacts').select('primary_email,status,full_name,primary_phone,company,campaign,form_name,source_lead_status').eq('workspace_id', id).in('primary_email', emailsToSave);
   if (readError) throw readError;
   const existingByEmail = new Map((existing || []).map((row: any) => [String(row.primary_email).toLowerCase(), row]));
-  const rowsToSave = rowsToProcess.map(row => {
+  const rowsToSave = data.map(row => {
     const old: any = existingByEmail.get(row.primary_email);
     return {
       ...row,
@@ -125,7 +105,7 @@ export async function upsertLeads(rows: Array<Record<string, unknown>>, workspac
           if (await isSuppressed(lead.primary_email, id)) continue;
 
           // Guard 2: Never send welcome email twice to the same email in this workspace
-          const { data: alreadySentWelcome } = await supabase
+          const { data: alreadySentWelcome, error: sentCheckError } = await supabase
             .from('email_events')
             .select('id')
             .eq('workspace_id', id)
@@ -134,7 +114,23 @@ export async function upsertLeads(rows: Array<Record<string, unknown>>, workspac
             .eq('event_type', 'sent')
             .limit(1);
 
+          if (sentCheckError) {
+            console.error(`[Welcome Email] Error checking sent history for ${lead.primary_email}:`, sentCheckError);
+            continue; // Production fail-safe: do not send if history check encounters an error
+          }
+
           if (alreadySentWelcome && alreadySentWelcome.length > 0) {
+            // Already received a welcome email previously in this workspace: mark job as sent and skip dispatch
+            const jobId = `welcome:${lead.id}`;
+            await supabase.from('email_jobs').upsert({
+              campaign_id: null,
+              workspace_id: id,
+              contact_id: lead.id,
+              idempotency_key: jobId,
+              status: 'sent',
+              provider: 'zeptomail',
+              attempts: 1
+            }, { onConflict: 'idempotency_key', ignoreDuplicates: true });
             continue;
           }
 

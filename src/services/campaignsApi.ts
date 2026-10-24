@@ -21,12 +21,26 @@ export interface WelcomeEmailRecord {
   subject: string;
 }
 
+export interface CampaignRecipient {
+  email: string;
+  name: string;
+  phone: string;
+  company: string;
+  status: string;
+  sentAt: string;
+  error?: string | null;
+}
+
 export const campaignsApi = {
   list: () => request<{ campaigns: Campaign[] }>('/v1/campaigns'),
   create: (input: CampaignInput) =>
     request<{ campaignId: string; queued: number; scheduledRecipients: number; suppressed: number; scheduledAt: string | null }>(
       '/v1/campaigns',
       { method: 'POST', body: JSON.stringify(input) }
+    ),
+  recipients: (campaignId: string) =>
+    request<{ campaignId: string; total: number; recipients: CampaignRecipient[]; campaign?: Campaign }>(
+      `/v1/campaigns/${campaignId}/recipients`
     )
 };
 

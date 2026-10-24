@@ -4750,6 +4750,27 @@ body {
   border-color: #8e8e93;
 }
 
+.campaign-row-delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-pill, 9999px);
+  background: transparent;
+  border: 1px solid transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  margin-left: 6px;
+}
+
+.campaign-row-delete-btn:hover {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #ef4444;
+}
+
 .campaign-empty-banner {
   padding: 44px 20px;
   text-align: center;

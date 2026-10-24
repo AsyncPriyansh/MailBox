@@ -947,6 +947,22 @@ function App() {
       });
   };
 
+  const handleDeleteCampaign = async (campaignId: string, campaignName: string) => {
+    if (!window.confirm(`Are you sure you want to delete campaign "${campaignName}"? This will permanently remove it from history and update all statistics.`)) {
+      return;
+    }
+    try {
+      await campaignsApi.delete(campaignId);
+      setRecentCampaigns(prev => prev.filter(c => c.id !== campaignId));
+      if (selectedCampaignDetail?.id === campaignId) {
+        setSelectedCampaignDetail(null);
+      }
+      setNotice(`Campaign "${campaignName}" deleted successfully.`);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to delete campaign');
+    }
+  };
+
   const handleRefreshCampaigns = async () => {
     setRefreshingCampaigns(true);
     try {
@@ -2442,6 +2458,17 @@ function App() {
                                 >
                                   <Users size={12} /> View ({c.recipient_count})
                                 </button>
+                                <button
+                                  className="campaign-row-delete-btn"
+                                  title="Delete campaign"
+                                  onClick={e => {
+                                    e.stopPropagation();
+                                    handleDeleteCampaign(c.id, c.name);
+                                  }}
+                                  aria-label="Delete campaign"
+                                >
+                                  <Trash2 size={12} />
+                                </button>
                               </div>
                             </td>
                           </tr>
@@ -3755,6 +3782,14 @@ function App() {
                 </span>
               </div>
               <div className="modal-footer-actions">
+                <button
+                  type="button"
+                  className="button secondary"
+                  style={{ color: '#dc2626', borderColor: '#fca5a5' }}
+                  onClick={() => handleDeleteCampaign(selectedCampaignDetail.id, selectedCampaignDetail.name)}
+                >
+                  <Trash2 size={13} /> Delete Campaign
+                </button>
                 <button
                   type="button"
                   className="button secondary"

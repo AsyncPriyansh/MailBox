@@ -41,7 +41,11 @@ export const campaignsApi = {
   recipients: (campaignId: string) =>
     request<{ campaignId: string; total: number; recipients: CampaignRecipient[]; campaign?: Campaign }>(
       `/v1/campaigns/${campaignId}/recipients`
-    )
+    ),
+  delete: (campaignId: string) =>
+    request<{ success: boolean; deletedId: string }>(`/v1/campaigns/${campaignId}`, {
+      method: 'DELETE'
+    })
 };
 
 export const welcomeEmailsApi = {

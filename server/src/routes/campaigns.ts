@@ -227,5 +227,34 @@ export async function registerCampaignRoutes(app: FastifyInstance) {
       recentCampaigns: campaigns.data || []
     };
   });
+
+  app.delete('/v1/campaigns/:id', async (req: any, reply) => {
+    if (!supabase) return reply.code(503).send({ error: 'Supabase is not configured.' });
+    const { id } = req.params;
+    const workspace = req.workspaceId;
+
+    // Delete associated email jobs and events
+    await supabase
+      .from('email_jobs')
+      .delete()
+      .eq('campaign_id', id)
+      .eq('workspace_id', workspace);
+
+    await supabase
+      .from('email_events')
+      .delete()
+      .eq('campaign_id', id)
+      .eq('workspace_id', workspace);
+
+    // Delete campaign
+    const { error } = await supabase
+      .from('campaigns')
+      .delete()
+      .eq('id', id)
+      .eq('workspace_id', workspace);
+
+    if (error) throw error;
+    return { success: true, deletedId: id };
+  });
 }
 

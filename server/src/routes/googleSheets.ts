@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { google } from 'googleapis';
 import { supabase } from '../supabase.js';
 import { decryptToken, encryptToken, googleOAuthClient, googleSpreadsheetId } from '../services/googleOAuth.js';
-import { getSheetsSyncStatus, syncWorkspaceSheet } from '../services/googleSheets.js';
+import { formatGoogleError, getSheetsSyncStatus, syncWorkspaceSheet } from '../services/googleSheets.js';
 
 const oauthStates=new Map<string,{workspaceId:string;expires:number}>();
 const sheetSchema=z.object({spreadsheetUrl:z.string().min(1).max(2048),range:z.string().trim().min(1).max(300).optional()});
@@ -27,11 +27,13 @@ export async function registerGoogleSheetsRoutes(app:FastifyInstance){
  app.get('/v1/integrations/google/status',async(req)=>getSheetsSyncStatus(req.workspaceId));
  app.post('/v1/integrations/google/sheet',async(req,reply)=>{
   if(!supabase)return reply.code(503).send({error:'Supabase is not configured.'});const parsed=sheetSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:'Paste a valid Google Sheets link and optional tab range.'});
+  let googleEmail: string | null = null;
   try {
     const spreadsheetId = googleSpreadsheetId(parsed.data.spreadsheetUrl);
     const current = await supabase.from('google_sheet_connections').select('google_email,encrypted_refresh_token').eq('workspace_id', req.workspaceId).maybeSingle();
     if (current.error) throw current.error;
     if (!current.data) return reply.code(400).send({ error: 'Connect your Google account first.' });
+    googleEmail = current.data.google_email;
     const client = googleOAuthClient();
     client.setCredentials({ refresh_token: decryptToken(current.data.encrypted_refresh_token) });
     const sheets = google.sheets({ version: 'v4', auth: client });
@@ -61,7 +63,8 @@ export async function registerGoogleSheetsRoutes(app:FastifyInstance){
     const synced = await syncWorkspaceSheet(req.workspaceId);
     return { ...synced, spreadsheetTitle: meta.data.properties?.title || null, range };
   } catch (error) {
-    return reply.code(400).send({ error: error instanceof Error ? error.message : 'Could not connect this spreadsheet.' });
+    const formatted = formatGoogleError(error, googleEmail);
+    return reply.code(400).send({ error: formatted });
   }
  });
  app.post('/v1/integrations/google/sync-now',async(req,reply)=>{try{return await syncWorkspaceSheet(req.workspaceId);}catch(error){return reply.code(400).send({error:error instanceof Error?error.message:'Google Sheets sync failed.'});}});

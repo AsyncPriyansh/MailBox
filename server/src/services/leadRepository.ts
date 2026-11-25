@@ -3,6 +3,7 @@ import type { Lead } from '../types.js';
 import { getEmailSettings } from './emailSettings.js';
 import { isSuppressed } from './suppressionService.js';
 import { sendWithZeptoMail } from '../providers/zeptomail.js';
+import { campaignQueue } from '../queues/campaignQueue.js';
 
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]!));
 const personalize = (value: string, lead: any) => value.replace(/\{\{\s*(name|email|company|campaign|phone)\s*\}\}/gi, (_match, key: string) => escapeHtml(lead[key.toLowerCase()] || ''));
@@ -92,107 +93,134 @@ export async function upsertLeads(rows: Array<Record<string, unknown>>, workspac
   if (error) throw error;
   const newLeads = (saved || []).filter((lead: any) => !existingByEmail.has(String(lead.primary_email).toLowerCase()));
   if (newLeads.length) {
-    try {
-      const settings = await getEmailSettings(id);
-      let template: any = null;
-      if (settings.welcomeTemplateId) {
-        const result = await supabase.from('email_templates').select('id,name,subject,html_source').eq('workspace_id', id).eq('id', settings.welcomeTemplateId).maybeSingle();
-        if (result.error) throw result.error;
-        template = result.data;
-      }
-      if (template) {
-        for (const lead of newLeads) {
-          if (await isSuppressed(lead.primary_email, id)) continue;
-
-          // Guard 2: Never send welcome email twice to the same email in this workspace
-          const { data: alreadySentWelcome, error: sentCheckError } = await supabase
-            .from('email_events')
-            .select('id')
-            .eq('workspace_id', id)
-            .eq('email', lead.primary_email)
-            .is('campaign_id', null)
-            .eq('event_type', 'sent')
-            .limit(1);
-
-          if (sentCheckError) {
-            console.error(`[Welcome Email] Error checking sent history for ${lead.primary_email}:`, sentCheckError);
-            continue; // Production fail-safe: do not send if history check encounters an error
-          }
-
-          if (alreadySentWelcome && alreadySentWelcome.length > 0) {
-            // Already received a welcome email previously in this workspace: mark job as sent and skip dispatch
-            const jobId = `welcome:${lead.id}`;
-            await supabase.from('email_jobs').upsert({
-              campaign_id: null,
-              workspace_id: id,
-              contact_id: lead.id,
-              idempotency_key: jobId,
-              status: 'sent',
-              provider: 'zeptomail',
-              attempts: 1
-            }, { onConflict: 'idempotency_key', ignoreDuplicates: true });
-            continue;
-          }
-
-          const leadData = {
-            name: lead.full_name || lead.primary_email.split('@')[0],
-            email: lead.primary_email,
-            phone: lead.primary_phone || '',
-            company: lead.company || '',
-            campaign: lead.campaign || 'Lead form'
-          };
-          const jobId = `welcome:${lead.id}`;
-          const subject = personalize(template.subject, leadData);
-          const html = personalize(template.html_source, leadData);
-
-          // Track in email_jobs table
-          await supabase.from('email_jobs').upsert({
-            campaign_id: null,
-            workspace_id: id,
-            contact_id: lead.id,
-            idempotency_key: jobId,
-            status: 'sending',
-            attempts: 1
-          }, { onConflict: 'idempotency_key', ignoreDuplicates: true });
-
-          // Send welcome email immediately via ZeptoMail
-          try {
-            const sent = await sendWithZeptoMail({
-              to: lead.primary_email,
-              name: leadData.name,
-              subject,
-              html
-            });
-            const msg = (sent as any)?.data?.[0]?.message_id || null;
-            await supabase.from('email_jobs').update({
-              status: 'sent',
-              provider: 'zeptomail',
-              provider_message_id: msg,
-              last_error: null
-            }).eq('idempotency_key', jobId);
-
-            await supabase.from('email_events').insert({
-              workspace_id: id,
-              campaign_id: null,
-              email: lead.primary_email,
-              event_type: 'sent',
-              event_data: { provider: 'zeptomail', messageId: msg, type: 'welcome' }
-            });
-            console.log(`[Welcome Email] Successfully sent welcome email to ${lead.primary_email}`);
-          } catch (sendErr: any) {
-            console.error(`[Welcome Email] Failed sending welcome email to ${lead.primary_email}:`, sendErr.message);
-            await supabase.from('email_jobs').update({
-              status: 'failed',
-              last_error: sendErr.message
-            }).eq('idempotency_key', jobId);
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Could not process welcome emails for new leads:', error);
-    }
+    void dispatchWelcomeEmails(newLeads, id);
   }
   return { imported: data.length };
+}
+
+async function dispatchWelcomeEmails(newLeads: any[], id: string) {
+  if (!supabase) return;
+  try {
+    const settings = await getEmailSettings(id);
+    let template: any = null;
+    if (settings.welcomeTemplateId) {
+      const result = await supabase.from('email_templates').select('id,name,subject,html_source').eq('workspace_id', id).eq('id', settings.welcomeTemplateId).maybeSingle();
+      if (result.error) throw result.error;
+      template = result.data;
+    }
+    if (!template) return;
+
+    const leadsToSend: any[] = [];
+    for (const lead of newLeads) {
+      if (await isSuppressed(lead.primary_email, id)) continue;
+
+      // Guard: Never send welcome email twice to the same email in this workspace
+      const { data: alreadySentWelcome, error: sentCheckError } = await supabase
+        .from('email_events')
+        .select('id')
+        .eq('workspace_id', id)
+        .eq('email', lead.primary_email)
+        .is('campaign_id', null)
+        .eq('event_type', 'sent')
+        .limit(1);
+
+      if (sentCheckError) {
+        console.error(`[Welcome Email] Error checking sent history for ${lead.primary_email}:`, sentCheckError);
+        continue;
+      }
+
+      if (alreadySentWelcome && alreadySentWelcome.length > 0) {
+        const jobId = `welcome:${lead.id}`;
+        await supabase.from('email_jobs').upsert({
+          campaign_id: null,
+          workspace_id: id,
+          contact_id: lead.id,
+          idempotency_key: jobId,
+          status: 'sent',
+          provider: 'zeptomail',
+          attempts: 1
+        }, { onConflict: 'idempotency_key', ignoreDuplicates: true });
+        continue;
+      }
+
+      leadsToSend.push(lead);
+    }
+
+    if (!leadsToSend.length) return;
+
+    // Record queued jobs in Supabase
+    const records = leadsToSend.map(lead => ({
+      campaign_id: null,
+      workspace_id: id,
+      contact_id: lead.id,
+      idempotency_key: `welcome:${lead.id}`,
+      status: 'queued',
+      provider: 'zeptomail',
+      attempts: 0
+    }));
+    await supabase.from('email_jobs').upsert(records, { onConflict: 'idempotency_key', ignoreDuplicates: true });
+
+    // Prepare jobs for Redis BullMQ
+    const queueJobs = leadsToSend.map(lead => ({
+      name: 'send-welcome-email',
+      data: {
+        workspace_id: id,
+        campaign_id: null,
+        contact_id: lead.id,
+        email: lead.primary_email,
+        name: lead.full_name || lead.primary_email.split('@')[0],
+        phone: lead.primary_phone || '',
+        company: lead.company || '',
+        campaign: lead.campaign || 'Lead form',
+        subject: template.subject,
+        html: template.html_source
+      },
+      opts: {
+        jobId: `welcome:${lead.id}`,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5000 },
+        removeOnComplete: 1000,
+        removeOnFail: 5000
+      }
+    }));
+
+    try {
+      // Enqueue to Redis
+      await Promise.race([
+        campaignQueue.addBulk(queueJobs),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('REDIS_OFFLINE_TIMEOUT')), 2000))
+      ]);
+      console.log(`[Welcome Email] Enqueued ${queueJobs.length} welcome emails to Redis queue.`);
+    } catch (err: any) {
+      console.warn('[Welcome Email] Redis queue offline or timed out. Dispatching in background via ZeptoMail:', err.message);
+      for (const item of queueJobs) {
+        const lead = item.data;
+        const jobId = `welcome:${lead.contact_id}`;
+        try {
+          await supabase.from('email_jobs').update({ status: 'sending', attempts: 1 }).eq('idempotency_key', jobId);
+          const sent = await sendWithZeptoMail({
+            to: lead.email,
+            name: lead.name,
+            subject: personalize(lead.subject, lead),
+            html: personalize(lead.html, lead)
+          });
+          const msg = (sent as any)?.data?.[0]?.message_id || null;
+          await supabase.from('email_jobs').update({ status: 'sent', provider_message_id: msg, last_error: null }).eq('idempotency_key', jobId);
+          await supabase.from('email_events').insert({
+            workspace_id: id,
+            campaign_id: null,
+            email: lead.email,
+            event_type: 'sent',
+            event_data: { provider: 'zeptomail', messageId: msg, type: 'welcome' }
+          });
+        } catch (sendErr: any) {
+          await supabase.from('email_jobs').update({ status: 'failed', last_error: sendErr.message }).eq('idempotency_key', jobId);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Could not process welcome emails for new leads:', error);
+  }
 }
 
 export async function retryWelcomeEmail(contactId: string, workspaceId: string) {

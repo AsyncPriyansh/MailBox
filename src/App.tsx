@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import {
   Activity,
+  AlertCircle,
   ArrowDown,
   ArrowDownUp,
   ArrowRight,
@@ -141,6 +142,7 @@ function App() {
   const [sheetRange,setSheetRange]=useState('Leads!A1:Z5000');
   const [syncingSheet,setSyncingSheet]=useState(false);
   const [clearBeforeSync, setClearBeforeSync] = useState(false);
+  const [sheetSetupError, setSheetSetupError] = useState<string | null>(null);
   const [emailHtml,setEmailHtml]=useState('');
   const [editingTemplate,setEditingTemplate]=useState<EmailTemplate|null>(null);
   const [pasteHtmlOpen, setPasteHtmlOpen] = useState(false);
@@ -362,6 +364,14 @@ function App() {
 
   const syncGoogleSheet = async()=>{setSyncingSheet(true);try{const result=await googleSheetsApi.syncNow();const [leadResult,dashboard,sheetStatus]=await Promise.all([leadsApi.list(),dashboardApi.stats(),googleSheetsApi.status()]);setLeads(leadResult.leads.map(toUiLead));setStats(dashboard.stats);setSheetsStatus(sheetStatus);setNotice(`Google Sheet synced: ${result.imported} lead rows processed.`);}catch(error){setNotice(error instanceof Error?error.message:'Google Sheets sync failed.');}finally{setSyncingSheet(false);}};
   const connectGoogle=async()=>{try{const{authUrl}=await googleSheetsApi.connectUrl();window.location.assign(authUrl);}catch(error){setNotice(error instanceof Error?error.message:'Could not start Google connection.');}};
+  const reconnectGoogle = async () => {
+    try {
+      await googleSheetsApi.disconnect();
+      await connectGoogle();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not reconnect Google.');
+    }
+  };
   const clearAllOldLeads = () => {
     const isSheetConnected = Boolean(sheetsStatus?.configured);
     setConfirmDialog({
@@ -424,6 +434,7 @@ function App() {
   const saveGoogleSheet = async (e: FormEvent) => {
     e.preventDefault();
     setSyncingSheet(true);
+    setSheetSetupError(null);
     try {
       if (clearBeforeSync && leads.length > 0) {
         await leadsApi.clearAll();
@@ -439,13 +450,16 @@ function App() {
       setStats(dashboard.stats);
       setSheetSetupOpen(false);
       setClearBeforeSync(false);
+      setSheetSetupError(null);
       setNotice(
         clearBeforeSync
           ? `Cleared old leads and connected ${result.spreadsheetTitle || 'Google Sheet'} with ${result.imported} fresh leads.`
           : `Connected ${result.spreadsheetTitle || 'Google Sheet'} and synced ${result.imported} leads.`
       );
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Could not connect spreadsheet.');
+      const msg = error instanceof Error ? error.message : 'Could not connect spreadsheet.';
+      setSheetSetupError(msg);
+      setNotice(msg);
     } finally {
       setSyncingSheet(false);
     }
@@ -454,6 +468,7 @@ function App() {
     try {
       await googleSheetsApi.disconnect();
       setSheetsStatus(await googleSheetsApi.status());
+      setSheetSetupError(null);
       setNotice('Google Sheets disconnected.');
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Could not disconnect Google.');
@@ -4206,7 +4221,7 @@ function App() {
                 <h2 id="sheet-setup-title">Connect Google Sheets</h2>
                 <p>Live sync leads directly from your Meta Lead Ads spreadsheet.</p>
               </div>
-              <button className="icon-btn" onClick={() => setSheetSetupOpen(false)} aria-label="Close dialog">
+              <button className="icon-btn" onClick={() => { setSheetSetupOpen(false); setSheetSetupError(null); }} aria-label="Close dialog">
                 <X size={18} />
               </button>
             </header>
@@ -4283,9 +4298,15 @@ function App() {
                     <div className="account-details">
                       <div className="account-title-row">
                         <b>{sheetsStatus.googleEmail}</b>
-                        <span className="connected-pill is-connected">
-                          <i /> Ready
-                        </span>
+                        {(sheetSetupError?.toLowerCase().includes('reconnect') || sheetSetupError?.toLowerCase().includes('expired') || sheetsStatus?.lastError?.toLowerCase().includes('expired') || sheetsStatus?.lastError?.toLowerCase().includes('reconnect')) ? (
+                          <span className="connected-pill" style={{ background: '#fef2f2', color: '#dc2626', borderColor: '#fca5a5' }}>
+                            <i style={{ background: '#dc2626' }} /> Reconnect needed
+                          </span>
+                        ) : (
+                          <span className="connected-pill is-connected">
+                            <i /> Ready
+                          </span>
+                        )}
                       </div>
                       <small>Google account authorized for read-only spreadsheet access</small>
                     </div>
@@ -4333,6 +4354,44 @@ function App() {
                       >
                         <Unlink size={12} /> Disconnect
                       </button>
+                    </div>
+                  )}
+
+                  {sheetSetupError && (
+                    <div
+                      className="sheet-modal-error-banner"
+                      style={{
+                        background: '#fef2f2',
+                        border: '1px solid #fecaca',
+                        borderRadius: '10px',
+                        padding: '12px 14px',
+                        marginBottom: '16px',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '12px',
+                        color: '#991b1b',
+                        fontSize: '13px',
+                        lineHeight: 1.45
+                      }}
+                    >
+                      <AlertCircle size={18} style={{ color: '#dc2626', flexShrink: 0, marginTop: '2px' }} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 700, marginBottom: '2px', color: '#7f1d1d' }}>Connection Failed</div>
+                        <div>{sheetSetupError}</div>
+                        {(sheetSetupError.toLowerCase().includes('reconnect') || sheetSetupError.toLowerCase().includes('expired') || sheetSetupError.toLowerCase().includes('invalid_grant')) && (
+                          <div style={{ marginTop: '10px' }}>
+                            <button
+                              type="button"
+                              className="button primary button-sm"
+                              onClick={reconnectGoogle}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '6px 12px' }}
+                            >
+                              <RefreshCw size={13} />
+                              Reconnect Google Account
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
 

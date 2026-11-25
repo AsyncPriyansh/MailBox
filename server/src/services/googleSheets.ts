@@ -74,11 +74,39 @@ export async function getSheetsSyncStatus(workspaceId:string):Promise<SheetsSync
  };
 }
 
+export function formatGoogleError(error: unknown, googleEmail?: string | null): string {
+  if (error instanceof Error) {
+    const msg = error.message || '';
+    const errObj = (error as any).response?.data?.error;
+    const errDesc = (error as any).response?.data?.error_description;
+    const status = (error as any).status || (error as any).code || (error as any).response?.status;
+
+    if (
+      msg.includes('invalid_grant') ||
+      errObj === 'invalid_grant' ||
+      (typeof errDesc === 'string' && errDesc.includes('invalid_grant'))
+    ) {
+      return 'Google authorization has expired or was revoked. Please disconnect and reconnect your Google account.';
+    }
+    if (msg.includes('The caller does not have permission') || status === 403) {
+      return `Access denied. Please ensure this Google Sheet is shared with ${googleEmail || 'your connected Google account'} (or set link sharing to "Anyone with the link can view").`;
+    }
+    if (msg.includes('Requested entity was not found') || status === 404) {
+      return 'Spreadsheet not found. Please verify the URL and ensure the sheet is accessible.';
+    }
+    return msg;
+  }
+  return 'Could not connect this spreadsheet.';
+}
+
 export async function syncWorkspaceSheet(workspaceId:string){
  if(activeSyncs.has(workspaceId))return{success:true,imported:0,rowsRead:0,lastSyncedAt:new Date().toISOString(),alreadySyncing:true};
  activeSyncs.add(workspaceId);
+ let googleEmail: string | null = null;
  try{
-  const stored=await connection(workspaceId);if(!stored.spreadsheet_id)throw new Error('Paste your spreadsheet link to finish setup.');
+  const stored=await connection(workspaceId);
+  googleEmail = stored.google_email;
+  if(!stored.spreadsheet_id)throw new Error('Paste your spreadsheet link to finish setup.');
   const oauth=googleOAuthClient();oauth.setCredentials({refresh_token:decryptToken(stored.encrypted_refresh_token)});
   const sheets=google.sheets({version:'v4',auth:oauth});
   if (!stored.spreadsheet_title && supabase) {
@@ -93,7 +121,11 @@ export async function syncWorkspaceSheet(workspaceId:string){
   const values=(response.data.values||[]) as unknown[][];if(values.length>5001)throw new Error('The configured range exceeds 5,000 data rows. Narrow it and sync again.');
   const leads=mapRows(values);const result=await upsertLeads(leads,workspaceId);const timestamp=new Date().toISOString();await saveSyncState(workspaceId,{lastSyncedAt:timestamp,lastImported:result.imported,lastError:null});
   return{success:true,imported:result.imported,rowsRead:Math.max(0,values.length-1),lastSyncedAt:timestamp};
- }catch(error){try{await saveSyncState(workspaceId,{lastError:error instanceof Error?error.message:'Google Sheets sync failed.'});}catch{}throw error;}finally{activeSyncs.delete(workspaceId);}
+ }catch(error){
+  const formatted = formatGoogleError(error, googleEmail);
+  try{await saveSyncState(workspaceId,{lastError:formatted});}catch{}
+  throw new Error(formatted);
+ }finally{activeSyncs.delete(workspaceId);}
 }
 
 export async function startGoogleSheetsSyncScheduler(logger:FastifyBaseLogger){

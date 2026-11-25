@@ -26,9 +26,24 @@ function mapRows(values:unknown[][]){
  const headers=values[0].map(value=>normalizeHeader(String(value??'')));
  const find=(...aliases:string[])=>{for(const alias of aliases){const at=headers.findIndex(header=>header===alias);if(at>=0)return at;}return-1;};
  const email=find('email','e_mail');if(email<0)throw new Error('The selected tab needs an Email column in the first row.');
- const name=find('full_name','name','contact_name'),first=find('first_name'),last=find('last_name'),phone=find('phone_number','phone','mobile','telephone'),company=find('company','business'),campaign=find('campaign_name','campaign'),formName=find('form_name'),leadStatus=find('lead_status');
+ const name=find('full_name','name','contact_name'),first=find('first_name'),last=find('last_name'),phone=find('phone_number','phone','mobile','telephone'),company=find('company','business'),campaign=find('campaign_name','campaign'),formName=find('form_name'),leadStatus=find('lead_status'),createdTime=find('created_time','created_at','timestamp','date','lead_time','submission_time');
  const cell=(row:unknown[],at:number)=>at>=0?String(row[at]??'').trim():'';
- return values.slice(1).filter(row=>cell(row,email).includes('@')).map(row=>({email:cell(row,email),name:name>=0?cell(row,name):[cell(row,first),cell(row,last)].filter(Boolean).join(' '),phone:cell(row,phone).replace(/^p:/i,'')||undefined,company:cell(row,company)||undefined,campaign:cell(row,campaign)||undefined,formName:cell(row,formName)||undefined,sourceLeadStatus:cell(row,leadStatus)||undefined,source:'Meta Lead Ads (Google Sheets)'}));
+ const parseTimestamp=(raw:string)=>{
+  if(!raw)return undefined;
+  const d=new Date(raw);
+  return isNaN(d.getTime())?undefined:d.toISOString();
+ };
+ return values.slice(1).filter(row=>cell(row,email).includes('@')).map(row=>({
+  email:cell(row,email),
+  name:name>=0?cell(row,name):[cell(row,first),cell(row,last)].filter(Boolean).join(' '),
+  phone:cell(row,phone).replace(/^p:/i,'')||undefined,
+  company:cell(row,company)||undefined,
+  campaign:cell(row,campaign)||undefined,
+  formName:cell(row,formName)||undefined,
+  sourceLeadStatus:cell(row,leadStatus)||undefined,
+  createdAt:createdTime>=0?parseTimestamp(cell(row,createdTime)):undefined,
+  source:'Meta Lead Ads (Google Sheets)'
+ }));
 }
 
 async function connection(workspaceId:string){

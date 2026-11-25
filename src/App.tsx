@@ -67,14 +67,28 @@ type CampaignAudience = 'new' | 'contacted' | 'qualified' | 'all' | 'selected';
 
 const statusClass = (s: string) => s.toLowerCase();
 
-const toUiLead = (lead: Lead): UiLead => ({
-  ...lead,
-  date: new Date(lead.createdAt).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  }),
-});
+const toUiLead = (lead: Lead): UiLead => {
+  const d = new Date(lead.createdAt);
+  const isValid = !isNaN(d.getTime());
+  const dateStr = isValid
+    ? d.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : '—';
+  const timeStr = isValid
+    ? d.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      })
+    : '';
+  return {
+    ...lead,
+    date: isValid ? `${dateStr} · ${timeStr}` : '—',
+  };
+};
 
 function getGreeting() {
   const hour = new Date().getHours();

@@ -48,6 +48,11 @@ export async function listLeads(workspaceId: string): Promise<Lead[]> {
 export async function upsertLeads(rows: Array<Record<string, unknown>>, workspaceId: string) {
   if (!supabase) throw new Error('Supabase is not configured.');
   const id = workspaceId; if (!id) throw new Error('Workspace is missing from session.');
+  const parseDate = (val: unknown) => {
+    if (!val) return undefined;
+    const d = new Date(String(val));
+    return isNaN(d.getTime()) ? undefined : d.toISOString();
+  };
   const imported = rows.map(r => ({
     workspace_id: id,
     primary_email: String(r.email || '').trim().toLowerCase(),
@@ -58,6 +63,7 @@ export async function upsertLeads(rows: Array<Record<string, unknown>>, workspac
     campaign: (r.campaign as string) || (r.campaignName as string) || (r.formName as string) || null,
     form_name: r.formName ? String(r.formName) : null,
     source_lead_status: r.sourceLeadStatus ? String(r.sourceLeadStatus) : null,
+    created_at: parseDate(r.createdAt || r.created_at),
     source_updated_at: new Date().toISOString()
   })).filter(r => r.primary_email.includes('@'));
 
@@ -65,15 +71,15 @@ export async function upsertLeads(rows: Array<Record<string, unknown>>, workspac
   for (const row of imported) {
     const previous = uniqueByEmail.get(row.primary_email);
     if (!previous) uniqueByEmail.set(row.primary_email, row);
-    else for (const key of ['full_name','primary_phone','company','source','campaign','form_name','source_lead_status'] as const) {
-      if ((previous[key] === null || previous[key] === '') && row[key] !== null && row[key] !== '') (previous as any)[key] = row[key];
+    else for (const key of ['full_name','primary_phone','company','source','campaign','form_name','source_lead_status','created_at'] as const) {
+      if ((previous[key] === null || previous[key] === undefined || previous[key] === '') && row[key] !== null && row[key] !== undefined && row[key] !== '') (previous as any)[key] = row[key];
     }
   }
   const data = [...uniqueByEmail.values()];
   if (!data.length) return { imported: 0 };
 
   const emailsToSave = data.map(r => r.primary_email);
-  const { data: existing, error: readError } = await supabase.from('contacts').select('primary_email,status,full_name,primary_phone,company,campaign,form_name,source_lead_status').eq('workspace_id', id).in('primary_email', emailsToSave);
+  const { data: existing, error: readError } = await supabase.from('contacts').select('primary_email,status,full_name,primary_phone,company,campaign,form_name,source_lead_status,created_at').eq('workspace_id', id).in('primary_email', emailsToSave);
   if (readError) throw readError;
   const existingByEmail = new Map((existing || []).map((row: any) => [String(row.primary_email).toLowerCase(), row]));
   const rowsToSave = data.map(row => {
@@ -86,6 +92,7 @@ export async function upsertLeads(rows: Array<Record<string, unknown>>, workspac
       campaign: row.campaign || old?.campaign || null,
       form_name: row.form_name || old?.form_name || null,
       source_lead_status: row.source_lead_status || old?.source_lead_status || null,
+      created_at: row.created_at || old?.created_at || new Date().toISOString(),
       status: old?.status || 'new'
     };
   });
@@ -114,7 +121,17 @@ async function dispatchWelcomeEmails(newLeads: any[], id: string) {
     for (const lead of newLeads) {
       if (await isSuppressed(lead.primary_email, id)) continue;
 
-      // Guard: Never send welcome email twice to the same email in this workspace
+      // Guard 1: Never send if an email job already exists for this contact
+      const { data: existingJob } = await supabase
+        .from('email_jobs')
+        .select('id')
+        .eq('workspace_id', id)
+        .eq('contact_id', lead.id)
+        .limit(1);
+
+      if (existingJob && existingJob.length > 0) continue;
+
+      // Guard 2: Never send welcome email twice to the same email in this workspace
       const { data: alreadySentWelcome, error: sentCheckError } = await supabase
         .from('email_events')
         .select('id')

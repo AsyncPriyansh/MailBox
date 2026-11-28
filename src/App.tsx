@@ -16,6 +16,8 @@ import {
   CloudUpload,
   Code2,
   Eye,
+  EyeOff,
+  Key,
   FileSpreadsheet,
   LayoutDashboard,
   CalendarDays,
@@ -55,7 +57,7 @@ import { ApiError } from './services/http';
 import { leadsApi } from './services/leadsApi';
 import { campaignsApi, dashboardApi, welcomeEmailsApi, type WelcomeEmailRecord, type CampaignRecipient } from './services/campaignsApi';
 import { parseLeadCsv, downloadLeadCsv } from './features/leads/csv';
-import { templatesApi, emailSettingsApi, type EmailTemplate, type EmailSettings } from './services/templatesApi';
+import { templatesApi, emailSettingsApi, apiKeyApi, type EmailTemplate, type EmailSettings } from './services/templatesApi';
 import { googleSheetsApi, type SheetsSyncStatus } from './services/googleSheetsApi';
 import { TemplateStudio } from './features/templates/TemplateStudio';
 import { LoginPage } from './features/auth/LoginPage';
@@ -146,6 +148,10 @@ function App() {
   const [emailSettingsError,setEmailSettingsError]=useState('');
   const [savingEmailSettings,setSavingEmailSettings]=useState(false);
   const [settingsNotice,setSettingsNotice]=useState('');
+  const [apiKey, setApiKey] = useState<string>('');
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [copiedKey, setCopiedKey] = useState(false);
+  const [loadingApiKey, setLoadingApiKey] = useState(false);
   const [notificationsOpen,setNotificationsOpen]=useState(false);
   const [openLeadActions,setOpenLeadActions]=useState<string|null>(null);
   const [sortNewestFirst,setSortNewestFirst]=useState(true);
@@ -207,14 +213,16 @@ function App() {
     setIsRetrying(true);
     try {
       const settingsRequest = emailSettingsApi.get().then(value => ({ value, error: '' })).catch(error => ({ value: null, error: error instanceof Error ? error.message : 'Email settings request failed.' }));
-      const [result, dashboard, templateResult, campaignResult, sheetStatus, settingsResult, welcomeResult] = await Promise.all([
+      const apiKeyRequest = apiKeyApi.get().then(res => res.apiKey).catch(() => '');
+      const [result, dashboard, templateResult, campaignResult, sheetStatus, settingsResult, welcomeResult, loadedApiKey] = await Promise.all([
         leadsApi.list(),
         dashboardApi.stats(),
         templatesApi.list(),
         campaignsApi.list(),
         googleSheetsApi.status(),
         settingsRequest,
-        welcomeEmailsApi.list().catch(() => ({ total: 0, records: [] as WelcomeEmailRecord[] }))
+        welcomeEmailsApi.list().catch(() => ({ total: 0, records: [] as WelcomeEmailRecord[] })),
+        apiKeyRequest,
       ]);
       setLeads(result.leads.map(toUiLead));
       setStats(dashboard.stats);
@@ -225,6 +233,7 @@ function App() {
       setSheetsStatus(sheetStatus);
       setWelcomeRecords(welcomeResult.records || []);
       setWelcomeTotalSent(welcomeResult.total || 0);
+      if (loadedApiKey) setApiKey(loadedApiKey);
       setServiceError('');
       setDataReady(true);
     } catch (error) {
@@ -2197,6 +2206,75 @@ function App() {
                       Disconnect
                     </button>
                   )}
+                </div>
+              </article>
+              <article className="workspace-setting-card">
+                <span className="stat-icon amber"><Key size={17} /></span>
+                <div style={{ flex: 1 }}>
+                  <h2>API & CRM Integration</h2>
+                  <p>Connect MailBox to getaipilot.online CRM</p>
+                  <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <input
+                      type={showApiKey ? 'text' : 'password'}
+                      value={apiKey || 'Loading API Key...'}
+                      readOnly
+                      style={{
+                        fontFamily: 'monospace',
+                        fontSize: '12px',
+                        padding: '6px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid #e2e8f0',
+                        background: '#f8fafc',
+                        width: '260px',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="button secondary icon-only"
+                      title={showApiKey ? 'Hide key' : 'Show key'}
+                      onClick={() => setShowApiKey(!showApiKey)}
+                    >
+                      {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                    </button>
+                    <button
+                      type="button"
+                      className="button secondary"
+                      onClick={() => {
+                        if (apiKey) {
+                          navigator.clipboard.writeText(apiKey);
+                          setCopiedKey(true);
+                          setTimeout(() => setCopiedKey(false), 2000);
+                        }
+                      }}
+                    >
+                      {copiedKey ? <Check size={14} style={{ color: '#10b981' }} /> : <Copy size={14} />}
+                      {copiedKey ? 'Copied' : 'Copy'}
+                    </button>
+                    <button
+                      type="button"
+                      className="button secondary"
+                      disabled={loadingApiKey}
+                      onClick={async () => {
+                        if (confirm('Regenerating will invalidate the current API key in CRM. Continue?')) {
+                          setLoadingApiKey(true);
+                          try {
+                            const res = await apiKeyApi.regenerate();
+                            setApiKey(res.apiKey);
+                            setSettingsNotice('API key regenerated successfully.');
+                          } catch (err: any) {
+                            setSettingsNotice(err.message || 'Failed to regenerate API key.');
+                          } finally {
+                            setLoadingApiKey(false);
+                          }
+                        }
+                      }}
+                    >
+                      Regenerate
+                    </button>
+                  </div>
+                  <small style={{ display: 'block', marginTop: '6px' }}>
+                    Paste this key in getaipilot.online CRM &gt; Leads &gt; Mailbox Connect.
+                  </small>
                 </div>
               </article>
               <article className="workspace-setting-card"><span className="stat-icon violet"><ShieldCheck size={17}/></span><div><h2>Suppression list</h2><p>Management coming soon</p><small>Campaign delivery protection continues to run automatically.</small></div><button className="button secondary" onClick={()=>setActive('Suppression list')}>Coming soon</button></article>

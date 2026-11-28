@@ -12,6 +12,7 @@ import { registerTemplateRoutes } from './routes/templates.js';
 import { registerEmailSettingsRoutes } from './routes/emailSettings.js';
 import { registerSuppressionRoutes } from './routes/suppression.js';
 import { registerZeptoMailWebhook } from './routes/zeptomailWebhook.js';
+import { registerExternalApiRoutes } from './routes/externalApi.js';
 
 const app = Fastify({ logger: true });
 app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, defaultDone) => {
@@ -25,15 +26,38 @@ app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, 
     defaultDone(err as Error, undefined);
   }
 });
-await app.register(cors,{origin:process.env.CLIENT_ORIGIN?.split(',')||true,methods:['GET','POST','PUT','PATCH','DELETE','OPTIONS'],allowedHeaders:['Content-Type','Authorization','X-Sync-Token','X-Workspace-Id']});
+await app.register(cors, {
+  origin: (origin, cb) => {
+    if (!origin || origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) {
+      return cb(null, true);
+    }
+    const envOrigins = (process.env.CLIENT_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (envOrigins.includes(origin) || envOrigins.length === 0) {
+      return cb(null, true);
+    }
+    return cb(null, true);
+  },
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Sync-Token', 'X-Workspace-Id', 'x-api-key'],
+});
 app.addHook('preHandler',async(req,reply)=>{
   const path=req.url.split('?')[0];
-  if(req.method==='OPTIONS'||path==='/health'||path.startsWith('/v1/auth/')||path==='/v1/webhooks/zeptomail'||path==='/v1/integrations/google/callback'||path==='/v1/integrations/google-sheets/sync'||path==='/v1/integrations/google/sync-trigger'||path==='/v1/integrations/leads/form')return;
+  if(req.method==='OPTIONS'||path==='/'||path==='/health'||path.startsWith('/v1/auth/')||path.startsWith('/v1/api/')||path==='/v1/webhooks/zeptomail'||path==='/v1/integrations/google/callback'||path==='/v1/integrations/google-sheets/sync'||path==='/v1/integrations/google/sync-trigger'||path==='/v1/integrations/leads/form')return;
   return requireWorkspace(req,reply);
 });
+app.get('/', async () => ({
+  status: 'healthy',
+  service: 'MailBox API Server',
+  message: 'Backend is running. CRM connection endpoints ready.',
+  endpoints: {
+    verify: '/v1/api/verify',
+    templates: '/v1/api/templates',
+    sendEmail: '/v1/api/send-email',
+  },
+}));
 app.get('/health',async()=>({status:'healthy',service:'mailbpox-api'}));
 await registerAuthRoutes(app);
-await registerLeadRoutes(app);await registerCampaignRoutes(app);await registerTemplateRoutes(app);await registerEmailSettingsRoutes(app);await registerSuppressionRoutes(app);await registerZeptoMailWebhook(app);await registerSheetWebhook(app);await registerGoogleSheetsRoutes(app);
+await registerLeadRoutes(app);await registerCampaignRoutes(app);await registerTemplateRoutes(app);await registerEmailSettingsRoutes(app);await registerSuppressionRoutes(app);await registerZeptoMailWebhook(app);await registerSheetWebhook(app);await registerGoogleSheetsRoutes(app);await registerExternalApiRoutes(app);
 try{await import('./workers/campaignWorker.js');}catch(error){app.log.error(error,'Campaign worker failed to start');}
 await startGoogleSheetsSyncScheduler(app.log);
 const port=Number(process.env.PORT||5051);await app.listen({port,host:'0.0.0.0'});
